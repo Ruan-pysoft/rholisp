@@ -233,7 +233,7 @@ I must say, typing thousands of lines of code on a phone screen over the coarse 
 
 ## Copying
 
-The logo ([rholisp.aseprite](./logo/rholisp.aseprite) and [rholisp.png](./logo/rholisp.png)) is released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)<img src="https://mirrors.creativecommons.org/presskit/icons/cc.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/zero.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;">. It was created by me using [Aseprite](https://www.aseprite.org/).
+The logo ([rholisp.aseprite](./logo/rholisp.aseprite) and [rholisp.png](./logo/rholisp.png)) is released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)<img src="https://mirrors.creativecommons.org/presskit/icons/cc.svg" height="14px" /><img src="https://mirrors.creativecommons.org/presskit/icons/zero.svg" height="14px" />. It was created by me using [Aseprite](https://www.aseprite.org/).
 
 All code in this repo is released into the public domain, as per the [Unlicense](https://unlicense.org).
 
