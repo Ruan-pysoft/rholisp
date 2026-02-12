@@ -105,7 +105,7 @@ Features of `bf.lisp`:
 
 `tm.lisp` is a truth machine: run the program, and type in 0 (remember to press enter), and it will print 0 in response before exiting. Enter 1, and it will continue printing 1 to the console in an infinite loop.
 
-`util.lisp` is a small library containing some utilitie functions.
+`util.lisp` is a small library containing some utility functions.
 
 ## Language design
 
