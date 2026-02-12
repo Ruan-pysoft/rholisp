@@ -13,7 +13,7 @@ To compile and run, most C compilers should work, assuming the relevant headers 
 Note however, that I have thus far only tested it on Termux with gcc.
 
 ```
-$ gcc -Wall -Wextra -Wno-initializer-overrides rholisp.c -o rho
+$ gcc -Wall -Wextra -Wno-override-init rholisp.c -o rho
 $ # add `-g -Og` for better debugging/valgrind reports, or `-O2` for a faster interpreter
 $ ./rho -h
 rholisp interpreter.

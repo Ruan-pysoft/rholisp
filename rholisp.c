@@ -1096,7 +1096,7 @@ struct call_res lcall(list_t args) {
 }
 struct call_res lpstr(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_STRING | args->val.type == LT_NUM);
+	assert(args->val.type == LT_STRING || args->val.type == LT_NUM);
 	assert(args->next == NULL);
 
 	if (args->val.type == LT_STRING) {
@@ -1275,6 +1275,8 @@ i64 lisp_val_cmp(struct lisp_val a, struct lisp_val b) {
 			return sa->len == sb->len ? 0 : sa->len < sb->len ? -1 : 1;
 		}
 	}
+
+	assert(false && "unreachable");
 }
 struct call_res lcmp(list_t args) {
 	assert(args != NULL);
@@ -1418,6 +1420,8 @@ struct call_res ltype(list_t args) {
 		case LT_BOOL: lret(lisp_val_copy(boolean_sym));
 		case LT_STRING: lret(lisp_val_copy(string_sym));
 	}
+
+	assert(false && "unreachable");
 }
 
 /*struct call_res lprompt(list_t args) {
