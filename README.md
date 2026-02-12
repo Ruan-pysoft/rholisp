@@ -1,4 +1,4 @@
-# rholisp
+# <img src="https://raw.githubusercontent.com/Ruan-pysoft/rholisp/refs/heads/master/logo/rholisp.png" height="28px" /> rholisp
 
 rholisp (or ρlisp) is a small lisp implementation in C.
 
@@ -232,6 +232,8 @@ All the text included in the initial commit of this repo was typed by me on my o
 I must say, typing thousands of lines of code on a phone screen over the coarse of a few weeks is torture (I swear I'm not a masochist!), but now I have a better understanding of how it feels to program when you can't comfortably type at 80+ wpm. If that's you, get that typing speed up, it's worth it, trust me. (I can type at about 40 to 60 wpm on my phone)
 
 ## Copying
+
+The logo ([rholisp.aseprite](./logo/rholisp.aseprite) and [rholisp.png](./logo/rholisp.png)) is released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)<img src="https://mirrors.creativecommons.org/presskit/icons/cc.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/zero.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;">. It was created by me using [Aseprite](https://www.aseprite.org/).
 
 All code in this repo is released into the public domain, as per the [Unlicense](https://unlicense.org).
 
