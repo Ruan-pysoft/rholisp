@@ -1,0 +1,8 @@
+(def S '((n) F (cons n n)))
+(def p0 nil)
+(def show '((n) F (println (len n))))
+(def add '((a b) F (if a (S (add (tail a) b)) b)))
+(def nS '((n of) F (if n (nS (- n 1) (S of)) of)))
+(show (add (nS 6 p0) (nS 7 p0)))
+(def mul '((a b) F (if a (add b (mul (tail a) b)) p0)))
+(show (mul (nS 6 p0) (nS 7 p0)))
