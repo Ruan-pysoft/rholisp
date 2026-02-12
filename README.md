@@ -1,6 +1,8 @@
 # rholisp
 
-rholisp (or ρlisp) is a small lisp implementation in C, written entirely on my phone.
+rholisp (or ρlisp) is a small lisp implementation in C.
+
+The initial implementation was written entirely on my phone. You may access it at [rholisp.zip](./rholisp.zip), including the README I typed out on my phone, etc.
 
 ## Compiling & Running
 

@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <assert.h>
 #include <errno.h>
+#include <string.h>
 
 typedef int64_t i64;
 
