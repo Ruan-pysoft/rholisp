@@ -303,3 +303,18 @@
     )
   )
 )
+
+(defm += (var val) (:= var (+ var val)))
+(defm -= (var val) (:= var (- var val)))
+(defm *= (var val) (:= var (* var val)))
+(defm /= (var val) (:= var (/ var val)))
+(defm %= (var val) (:= var (% var val)))
+(defm |= (var val) (:= var (| var val)))
+(defm &= (var val) (:= var (& var val)))
+(defm ^= (var val) (:= var (^ var val)))
+(defm or= (var val) (:= var (or var val)))
+(defm and= (var val) (:= var (and var val)))
+(defm &$= (var val) (:= var (&$ var val)))
+
+(defm ++ (var) (+= var 1))
+(defm -- (var) (-= var 1))
