@@ -53,7 +53,7 @@
     (if (.run-procedural.allowed? (head expr))
       T
       (assoc (macro (eval (head expr)))
-        (if (and (:callable? macro) (:macro? macro))
+        (if (and (= (type macro) ' list) (:callable? macro) (:macro? macro))
           (.run-procedural.check-allowed
             (- depth 1)
             (.run-procedural.expandm macro (tail expr))
