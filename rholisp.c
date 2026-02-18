@@ -99,8 +99,6 @@ void sym_free(sym_t sym) {
 
 	--sym->refcount;
 	if (!sym->refcount) {
-		// fprintf(stderr, "freeing `%s`...\n", sym->sym);
-
 		free((void*)sym->sym);
 		free(sym);
 	}
@@ -132,9 +130,7 @@ string_t string_copy(string_t string) {
 	assert(string != NULL);
 	assert(string->refcount != 0);
 
-	// fprintf(stderr, "string %p's refs: %lu", string, string->refcount);
 	++string->refcount;
-	// fprintf(stderr, " -> %lu\n", string->refcount);
 	return string;
 }
 void string_free(string_t string) {
@@ -144,12 +140,8 @@ void string_free(string_t string) {
 	}
 	assert(string->refcount != 0);
 
-	// fprintf(stderr, "string %p's refs: %lu", string, string->refcount);
 	--string->refcount;
-	// fprintf(stderr, " -> %lu\n", string->refcount);
 	if (!string->refcount) {
-		// fprintf(stderr, "freeing \"%.*s\"...\n", (int)string->len, string->data);
-
 		if (!string->borrows) free((void*)string->data);
 		else string_free(string->borrows);
 		free(string);
@@ -167,7 +159,6 @@ string_t string_substr(string_t string, size_t begin, size_t end) {
 		.borrows = string_copy(string),
 		.refcount = 1,
 	};
-	// fprintf(stderr, "after substr, string %p has %lu refs\n", string, string->refcount);
 	return res;
 }
 
@@ -193,10 +184,6 @@ struct lisp_val lisp_val_copy(struct lisp_val val) {
 void list_free(list_t list);
 void lisp_val_print(struct lisp_val this, FILE *f);
 void lisp_val_free(struct lisp_val val) {
-	// fputs("freeing val ", stderr);
-	// lisp_val_print(val, stderr);
-	// fprintf(stderr, " of type %d\n", val.type);
-
 	if (val.type == LT_SYM) sym_free(val.as.sym);
 	else if (val.type == LT_LIST) list_free(val.as.list);
 	else if (val.type == LT_STRING) string_free(val.as.string);
@@ -217,10 +204,6 @@ struct list {
 
 void list_print(list_t this, FILE *f);
 list_t list_copy(list_t list) {
-	// fputs("copying list ", stderr);
-	// list_print(list, stderr);
-	// fprintf(stderr, " with %lu refs...\n", list ? list->refcount : 0);
-
 	if (list == NULL) return NULL;
 	assert(list->refcount != 0);
 
@@ -228,10 +211,6 @@ list_t list_copy(list_t list) {
 	return list;
 }
 void list_free(list_t list) {
-	// fputs("freeing list ", stderr);
-	// list_print(list, stderr);
-	// fprintf(stderr, " with %lu refs...\n", list ? list->refcount : 0);
-
 	if (list == NULL) return;
 	if (list->refcount == 0) {
 		fprintf(stderr, "error: re-freeing (%p)!\n", list);
@@ -240,8 +219,6 @@ void list_free(list_t list) {
 
 	--list->refcount;
 	if (!list->refcount) {
-		// fprintf(stderr, "freeing (%p)...\n", list);
-
 		list_free(list->next);
 		lisp_val_free(list->val);
 		free(list);
@@ -564,11 +541,6 @@ list_t list_parse(const char **str, size_t *str_len) {
 		struct lisp_val tmp = lisp_val_parse(str, str_len);
 		res = list_append(res, tmp);
 		lisp_val_free(tmp);
-		// fputs("after appending ", stderr);
-		// lisp_val_print(tmp, stderr);
-		// fputs(" to the list, we have: ", stderr);
-		// list_print(res, stderr);
-		// fprintf(stderr, "; ref(list) = %lu\n", res->refcount);
 	}
 }
 
@@ -801,10 +773,6 @@ struct env *curr_env = &root_env;
 
 struct call_res ladd(list_t args) {
 	assert(args != NULL);
-
-	// fputs("args: ", stdout);
-	// list_print(args, stdout);
-	// putchar('\n');
 
 	i64 res = 0;
 
@@ -1108,25 +1076,6 @@ struct call_res lpstr(list_t args) {
 	}
 
 	lret(nil);
-
-	/*struct lisp_val res = lisp_val_copy(nil);
-	bool first = true;
-
-	while (args != NULL) {
-		if (!first) putchar(' ');
-		first = false;
-		if (args->val.type == LT_STRING) {
-			printf("%.*s", (int)args->val.as.string->len, args->val.as.string->data);
-		} else {
-			lisp_val_print(args->val, stdout);
-		}
-		lisp_val_free(res);
-		res = lisp_val_copy(args->val);
-		args = args->next;
-	}
-	putchar('\n');
-
-	lret(res);*/
 }
 struct call_res lhead(list_t args) {
 	assert(args != NULL);
@@ -1265,8 +1214,6 @@ i64 lisp_val_cmp(struct lisp_val a, struct lisp_val b) {
 
 			if (sa == sb) return 0;
 
-			// fprintf(stderr, "comparing \"%.*s\" and \"%.*s\"...\n", sa->len, sa->data, sb->len, sb->data);
-
 			const size_t upto = sa->len < sb->len ? sa->len : sb->len;
 			for (size_t i = 0; i < upto; ++i) {
 				if (sa->data[i] < sb->data[i]) return -1;
@@ -1383,8 +1330,6 @@ struct call_res lor(list_t args) {
 	assert(args != NULL);
 	assert(args->next != NULL);
 
-	// fprintf(stderr, "running or...\n");
-
 	while (args->next != NULL) {
 		struct lisp_val res = eval(args->val);
 		if (lisp_val_is_truthy(res)) lret(res);
@@ -1423,29 +1368,6 @@ struct call_res ltype(list_t args) {
 
 	assert(false && "unreachable");
 }
-
-/*struct call_res lprompt(list_t args) {
-	while (args != NULL) {
-		lisp_val_print(args->val, stdout);
-		putchar(' ');
-		args = args->next;
-	}
-
-	enum input_status input_status;
-	input_status = input("", buf, MAX_LINE_LEN, stdin);
-	if (input_status == IS_EOF) {
-		lret(lisp_val_copy(nil));
-	} else if (input_status == IS_LINE_TOO_LONG) {
-		printf("ERROR: Longest supported line is %d characters\n", MAX_LINE_LEN);
-		lret(lisp_val_copy(nil));
-	}
-
-	line = buf;
-	line_len = strlen(line);
-
-	// cast &line to (void*) to side-step incorrect constness warnings from the compiler
-	lret(lisp_val_parse((void*)&line, &line_len));
-}*/
 
 struct call_res lexit(list_t args) {
 	assert(args == NULL || args->next == NULL);
@@ -1614,13 +1536,11 @@ struct call_res lparse(list_t args) {
 	}
 
 	struct lisp_val parsed = lisp_val_parse(&str, &len);
-	// fputs("getting remainder...\n", stderr);
 	string_t tmp = string_substr(args->val.as.string, str - args->val.as.string->data, args->val.as.string->len);
 	res = list_append(res, (struct lisp_val) {
 		.type = LT_STRING,
 		.as.string = tmp,
 	});
-	// fputs("freeing remainder...\n", stderr);
 	string_free(tmp);
 
 	res = list_append(res, parsed);
@@ -1954,7 +1874,6 @@ struct {
 	} },
 	// do implemented in lisp:
 	// (defm mydo (() vals) (if (and ' vals (tail ' vals)) (and (or (eval (head ' vals)) T) (eval (cons ' mydo (tail ' vals)))) (if ' vals (eval (head ' vals)))))
-	// or maybe? (I thought I hadn't implemented TCO for (call), but it seems I have?)
 	// (defm mydo (() vals) (if (and ' vals (tail ' vals)) (and (or (eval (head ' vals)) T) (call mydo (tail ' vals))) (if ' vals (eval (head ' vals)))))
 	{ "call", { lcall, true, NULL,
 		"  callable args -> call the callable with the given arguments; prevents re-evaluation of arguments by a function, and can be used to pass evaluated arguments to a macro"
@@ -2018,7 +1937,6 @@ struct {
 	{ "type", { ltype, true, NULL,
 		"  val -> the type of the value, as a symbol (number, builtin, symbol, list, boolean, string)"
 	} },
-	// { "prompt", { lprompt, true, NULL, NULL } },
 	{ "exit", { lexit, true, NULL,
 		"  (no arguments) -> exits the program with exit code 0\n"
 		"  exitcode -> exits the program with the specified exit code"
@@ -2222,8 +2140,6 @@ struct call_res ll_call(list_t fn, list_t args, bool tailcall, bool pre_evald) {
 	list_t params = lfn.params;
 
 	if (lfn.is_macro) {
-		// fputs("is macro!\n", stderr);
-
 		struct env env = {0};
 
 		while (params != NULL) {
@@ -2254,17 +2170,7 @@ struct call_res ll_call(list_t fn, list_t args, bool tailcall, bool pre_evald) {
 			fputs("too many arguments provided!\n", stderr);
 		}
 
-		// fputs("pre-sub:  ", stderr);
-		// lisp_val_print(body, stderr);
-		// fputc('\n', stderr);
 		struct lisp_val body = substitute(lfn.body, &env);
-		// fputs("post-sub: ", stderr);
-		// lisp_val_print(body, stderr);
-		// fputc('\n', stderr);
-
-		// fputs("got substituted body: ", stderr);
-		// lisp_val_print(body, stderr);
-		// fputc('\n', stderr);
 
 		env_clear(&env);
 		list_fn_free(lfn);
@@ -2275,10 +2181,7 @@ struct call_res ll_call(list_t fn, list_t args, bool tailcall, bool pre_evald) {
 			.destroy_env = false,
 		};
 	} else {
-		// fputs("is not macro!\n", stderr);
-
 		bool replace_env = tailcall && curr_env->params_of == fn;
-		// fprintf(stderr, "replacing env? %d\n", replace_env);
 
 		struct env *env = malloc(sizeof(struct env));
 		*env = (struct env) {0};
@@ -2413,17 +2316,11 @@ void run_repl(void) {
 
 		// cast &line to (void*) to side-step incorrect constness warnings from the compiler
 		struct lisp_val parsed = lisp_val_parse((void*)&line, &line_len);
-		// fputs("parsed value: ", stderr);
-		// lisp_val_print(parsed, stderr);
-		// fputc('\n', stderr);
 		struct lisp_val evald = eval(parsed);
-		// fputs("evald value: ", stderr);
-		// lisp_val_print(evald, stderr);
-		// fputc('\n', stderr);
 
-		// fputs("freeing parsed value...\n", stderr);
 		lisp_val_free(parsed);
 		lisp_val_free(last_res);
+
 		last_res = evald;
 		lisp_val_print(last_res, stdout);
 		putchar('\n');
@@ -2531,7 +2428,6 @@ int main(int argc, char **argv) {
 	});
 
 	if (!nostd) {
-		// run_file("/data/data/com.termux/files/home/lisp/std.lisp");
 		run_file("std.lisp");
 	}
 	for (int i = 0; i < argc; ++i) {
@@ -2545,8 +2441,5 @@ int main(int argc, char **argv) {
 		run_repl();
 	}
 
-	// fputs("freeing last result: ", stderr);
-	// lisp_val_print(last_res, stderr);
-	// fputc('\n', stderr);
 	lisp_val_free(last_res);
 }
