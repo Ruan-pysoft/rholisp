@@ -81,13 +81,31 @@
   )
 )
 
+(defn prefix-op? (ch) (switch ch
+  (case # + T)
+  (case # - T)
+  (default F)
+))
+
+(defn parse-prefix (program) (switch (program.first$ program)
+  (case # + (parse-base (trim-ws (program.advance program))))
+  (case # - (assoc (res (parse-base (trim-ws (program.advance program))))
+    (list (- (head res)) (scd res))
+  ))
+  (default
+    (program.err program "unknown prefix operation")
+  )
+))
+
 (defn parse-base (program)
   (if (digit? (program.first$ program))
     (parse-num program)
   (if (= (program.first$ program) # ()
     (parse-parens program)
-    (program.err program "unexpectec character in input")
-  ))
+  (if (prefix-op? (program.first$ program))
+    (parse-prefix program)
+    (program.err program "unexpected character in input")
+  )))
 )
 
 (defn parse-fact (program) (assoc
