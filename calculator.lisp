@@ -69,28 +69,75 @@
   )
 )
 
+(defn parse-parens (program)
+  (do
+    (assert (= (program.first$ program) # ())
+    (assoc (res (parse-expr (trim-ws (program.advance program))))
+      (if (= (program.first$ (scd res)) # ))
+        (list (head res) (program.advance (scd res)))
+        (program.err (scd res) "expected closing )")
+      )
+    )
+  )
+)
+
+(defn parse-base (program)
+  (if (digit? (program.first$ program))
+    (parse-num program)
+  (if (= (program.first$ program) # ()
+    (parse-parens program)
+    (program.err program "unexpectec character in input")
+  ))
+)
+
+(defn parse-fact (program) (assoc
+  (rec (\ (lhs program)
+    (do
+      (:= program (trim-ws program))
+      (switch (program.first$ program)
+        (case # * (assoc
+          (rhs (parse-base (trim-ws (program.advance program))))
+          (rec (* lhs (head rhs)) (scd rhs))
+        ))
+        (case # / (assoc
+          (rhs (parse-base (trim-ws (program.advance program))))
+          (rec (/ lhs (head rhs)) (scd rhs))
+        ))
+        (case # % (assoc
+          (rhs (parse-base (trim-ws (program.advance program))))
+          (rec (% lhs (head rhs)) (scd rhs))
+        ))
+        (default (list lhs program))
+      )
+    )
+  ))
+  (call rec (parse-base program))
+))
+
 (defn parse-term (program) (assoc
   (rec (\ (lhs program)
     (do
       (:= program (trim-ws program))
       (switch (program.first$ program)
         (case # + (assoc
-          (rhs (parse-num (trim-ws (program.advance program))))
+          (rhs (parse-fact (trim-ws (program.advance program))))
           (rec (+ lhs (head rhs)) (scd rhs))
         ))
         (case # - (assoc
-          (rhs (parse-num (trim-ws (program.advance program))))
+          (rhs (parse-fact (trim-ws (program.advance program))))
           (rec (- lhs (head rhs)) (scd rhs))
         ))
         (default (list lhs program))
       )
     )
   ))
-  (call rec (parse-num program))
+  (call rec (parse-fact program))
 ))
 
+(defn parse-expr (program) (parse-term program))
+
 (defn calc-parse (string)
-  (parse-term (trim-ws (list string 0)))
+  (parse-expr (trim-ws (list string 0)))
 )
 ; (defn calc-parse (string) (tmpfn (program)
   ; (if (digit? (program.first$ program))
