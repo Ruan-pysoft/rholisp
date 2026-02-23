@@ -1862,6 +1862,48 @@ struct call_res lffi_unload(list_t args) {
 	lret(nil);
 }
 
+struct call_res lffi_sym(list_t args) {
+	assert(args != NULL);
+	assert(args->val.type == LT_LIST);
+	assert(args->val.as.list != NULL);
+	assert(args->val.as.list->val.type == LT_SYM);
+	assert(strcmp(args->val.as.list->val.as.sym->sym, "clib") == 0);
+	assert(args->val.as.list->next != NULL);
+	assert(args->val.as.list->next->val.type == LT_NUM);
+	assert(args->val.as.list->next->next == NULL);
+	assert(args->next != NULL);
+	assert(args->next->val.type == LT_STRING);
+	assert(args->next->next == NULL);
+
+	dlerror();
+	char *symname = strndup(args->next->val.as.string->data, args->next->val.as.string->len);
+	void *sym = dlsym(*(void**)&args->val.as.list->next->val.as.num, symname);
+	free(symname);
+	const char *err = NULL;
+	if (sym == NULL && (err = dlerror()) != NULL) {
+		lret(((struct lisp_val) {
+			.type = LT_STRING,
+			.as.string = string_from_str(err),
+		}));
+	} else {
+		list_t res = NULL;
+		res = list_cons((struct lisp_val) {
+			.type = LT_NUM,
+			.as.num = *(i64*)&sym,
+		}, res);
+		res = list_cons((struct lisp_val) {
+			.type = LT_SYM,
+			.as.sym = sym_from_str("csym"),
+		}, res);
+		lret(((struct lisp_val) {
+			.type = LT_LIST,
+			.as.list = res,
+		}));
+	}
+
+	lret(nil);
+}
+
 struct {
 	const char *name;
 	struct lbuiltin fn;
@@ -2038,10 +2080,10 @@ struct {
 	{ "!ffi-unload", { lffi_unload, true, NULL,
 		"  library -> unloads the given C library"
 	} },
-	/*{ "!ffi-sym", { lffi_sym, true, NULL,
+	{ "!ffi-sym", { lffi_sym, true, NULL,
 		"  library fnname -> tries to load the given name from the given C library, returning (' csym <id>) on success or a string containing the error on failure"
 	} },
-	{ "!ffi-call", { lffi_call, true, NULL,
+	/*{ "!ffi-call", { lffi_call, true, NULL,
 		"  csym ret-type args... -> calls the given C function with the given return type and the given arguments, arguments given first as a type, then a value\n"
 		"  The following C types are supported:\n"
 		"    i8    8-bit signed integer, value is a number\n"
