@@ -7,8 +7,51 @@
 #include <string.h>
 #include <dlfcn.h>
 
+#include <ffi.h>
+
 typedef int64_t i64;
 typedef uint64_t u64;
+
+#define da_append_many(da, things, amount) do { \
+		if ((da)->capacity == 0) { \
+			assert((da)->items == NULL); \
+			(da)->items = malloc(16*sizeof(*(da)->items)); \
+			(da)->count = 0; \
+			(da)->capacity = 16; \
+		} \
+		while ((amount) + (da)->count > (da)->capacity) { \
+			(da)->capacity *= 2; \
+			/* TODO: unnecessary reallocs here, optimise? */ \
+			(da)->items = realloc((da)->items, (da)->capacity); \
+		} \
+		if ((amount) == 0) break; \
+		if ((amount) == 1) { \
+			(da)->items[(da)->count++] = *(things); \
+		} \
+		memcpy(&(da)->items[(da)->count], (things), (amount)); \
+		(da)->count += (amount); \
+	} while (0)
+#define da_append(da, thing) do { \
+		if ((da)->capacity == 0) { \
+			assert((da)->items == NULL); \
+			(da)->items = malloc(16*sizeof(*(da)->items)); \
+			(da)->count = 0; \
+			(da)->capacity = 16; \
+		} \
+		if (1 + (da)->count > (da)->capacity) { \
+			(da)->capacity *= 2; \
+			(da)->items = realloc((da)->items, (da)->capacity); \
+		} \
+		(da)->items[(da)->count++] = (thing); \
+	} while (0)
+#define da_free(da) do { \
+		if ((da)->capacity) { \
+			free((da)->items); \
+			(da)->count = 0; \
+			(da)->capacity = 0; \
+		} \
+	} while (0)
+#define da_foreach(da, type, it) for (type *it = (da)->items; it < (da)->items + (da)->count; ++it)
 
 struct string_builder {
 	char *items;
@@ -16,37 +59,16 @@ struct string_builder {
 	size_t capacity;
 };
 void sb_addb(struct string_builder *sb, const char *b, size_t l) {
-	if (sb->capacity == 0) {
-		assert(sb->items == NULL);
-
-		sb->items = malloc(16);
-		sb->count = 0;
-		sb->capacity = 16;
-	}
-
-	while (l + sb->count > sb->capacity) {
-		sb->capacity *= 2;
-		sb->items = realloc(sb->items, sb->capacity);
-	}
-
-	if (l == 0) return;
-	if (l == 1) {
-		sb->items[sb->count++] = *b;
-		return;
-	}
-
-	memcpy(&sb->items[sb->count], b, l);
-	sb->count += l;
+	da_append_many(sb, b, l);
 }
 void sb_adds(struct string_builder *sb, const char *s) {
 	sb_addb(sb, s, strlen(s));
 }
 void sb_addc(struct string_builder *sb, char c) {
-	sb_addb(sb, &c, 1);
+	da_append(sb, c);
 }
 void sb_clear(struct string_builder *sb) {
-	if (sb->items) free(sb->items);
-	*sb = (struct string_builder) {0};
+	da_free(sb);
 }
 
 struct string_builder line_builder = {0};
@@ -2113,6 +2135,8 @@ size_t construct_cval_into(struct ctype type, struct lisp_val from, void *memory
 			return size_so_far;
 		} break;
 	}
+
+	assert(false && "unreachable");
 }
 
 void *create_cval(struct ctype type, struct lisp_val from) {
@@ -2129,6 +2153,74 @@ void *create_cval(struct ctype type, struct lisp_val from) {
 	return val;
 }
 
+ffi_type *ctype_to_ffi_type(struct ctype ctype) {
+	ffi_type *res;
+
+	switch (ctype.basic_type) {
+		case CT_I8: {
+			res = &ffi_type_sint8;
+		} break;
+		case CT_U8: {
+			res = &ffi_type_uint8;
+		} break;
+		case CT_I32: {
+			res = &ffi_type_sint32;
+		} break;
+		case CT_U32: {
+			res = &ffi_type_uint32;
+		} break;
+		case CT_I64: {
+			res = &ffi_type_sint64;
+		} break;
+		case CT_U64: {
+			res = &ffi_type_uint64;
+		} break;
+		case CT_F32: {
+			res = &ffi_type_float;
+		} break;
+		case CT_F64: {
+			res = &ffi_type_double;
+		} break;
+		case CT_PTR: {
+			res = &ffi_type_pointer;
+		} break;
+		case CT_VOID: {
+			res = &ffi_type_void;
+		} break;
+		case CT_STRUCT: {
+			res = malloc(sizeof(*res));
+			struct {
+				ffi_type **items;
+				size_t count;
+				size_t capacity;
+			} elements;
+
+			for (list_t member = ctype.inner_desc.struct_members; member != NULL; ++member) {
+				struct ctype member_type = parse_ctype(member->val);
+				ffi_type *ffi_type = ctype_to_ffi_type(member_type);
+				da_append(&elements, ffi_type);
+			}
+			da_append(&elements, NULL);
+
+			res->size = 0;
+			res->alignment = 0;
+			res->type = FFI_TYPE_STRUCT;
+			res->elements = elements.items;
+		} break;
+	}
+
+	return res;
+}
+void free_ffi_type(ffi_type *type) {
+	if (type != NULL && type->type == FFI_TYPE_STRUCT) {
+		for (ffi_type **st = type->elements; st != NULL; ++st) {
+			free_ffi_type(*st);
+		}
+		free(type->elements);
+		free(type);
+	}
+}
+
 struct call_res lffi_call(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_LIST);
@@ -2142,7 +2234,42 @@ struct call_res lffi_call(list_t args) {
 
 	void *func = *(void**)&args->val.as.list->next->val.as.num;
 
-	// TODO:
+	struct {
+		ffi_type **items;
+		size_t capacity;
+		size_t count;
+	} cargs = {0};
+	struct {
+		void **items;
+		size_t capacity;
+		size_t count;
+	} cvals = {0};
+	struct ctype return_type = parse_ctype(args->next->val);
+	ffi_arg return_val;
+
+	args = args->next->next;
+	while (args) {
+		assert(args->next != NULL);
+
+		struct ctype arg_type = parse_ctype(args->val);
+		void *arg = create_cval(arg_type, args->next->val);
+
+		da_append(&cargs, ctype_to_ffi_type(arg_type));
+		da_append(&cvals, arg);
+
+		args = args->next->next;
+	}
+
+	fprintf(stderr, "Calling function %p with %lu arguments...\n", func, cargs.count);
+
+	da_foreach(&cargs, ffi_type *, it) {
+		free_ffi_type(*it);
+	}
+	da_free(&cargs);
+	da_foreach(&cvals, void *, it) {
+		free(*it);
+	}
+	da_free(&cvals);
 
 	lret(nil);
 }
