@@ -7,31 +7,76 @@
 #include <string.h>
 
 typedef int64_t i64;
+typedef uint64_t u64;
 
-#define MAX_LINE_LEN (1 << 8)
-char buf[MAX_LINE_LEN];
+struct string_builder {
+	char *items;
+	size_t count;
+	size_t capacity;
+};
+void sb_addb(struct string_builder *sb, const char *b, size_t l) {
+	if (sb->capacity == 0) {
+		assert(sb->items == NULL);
+
+		sb->items = malloc(16);
+		sb->count = 0;
+		sb->capacity = 16;
+	}
+
+	while (l + sb->count > sb->capacity) {
+		sb->capacity *= 2;
+		sb->items = realloc(sb->items, sb->capacity);
+	}
+
+	if (l == 0) return;
+	if (l == 1) {
+		sb->items[sb->count++] = *b;
+		return;
+	}
+
+	memcpy(&sb->items[sb->count], b, l);
+	sb->count += l;
+}
+void sb_adds(struct string_builder *sb, const char *s) {
+	sb_addb(sb, s, strlen(s));
+}
+void sb_addc(struct string_builder *sb, char c) {
+	sb_addb(sb, &c, 1);
+}
+void sb_clear(struct string_builder *sb) {
+	if (sb->items) free(sb->items);
+	*sb = (struct string_builder) {0};
+}
+
+struct string_builder line_builder = {0};
 size_t line_len;
 char *line;
 
 enum input_status {
 	IS_SUCCESS,
-	IS_LINE_TOO_LONG,
 	IS_EOF,
 };
-enum input_status input(const char *prompt, char *buf, size_t buf_len, FILE *infile) {
-	fputs(prompt, stdout);
-	for (size_t i = 0; i < buf_len; ++i) {
+enum input_status input(struct string_builder *line_builder, FILE *infile) {
+	line_builder->count = 0;
+
+	bool eof = 0;
+
+	for (;;) {
 		const int inp = getc(infile);
-		if (inp == EOF) return IS_EOF;
-		if (inp == '\n') {
-			buf[i] = '\0';
-			line = buf;
-			line_len = i;
-			return IS_SUCCESS;
+
+		if (inp == EOF) {
+			eof = true;
+			break;
 		}
-		buf[i] = inp;
+
+		if (inp == '\n') {
+			break;
+		}
+
+		sb_addc(line_builder, inp);
 	}
-	return IS_LINE_TOO_LONG;
+
+	return eof ? IS_EOF : IS_SUCCESS;
 }
 
 enum lisp_type {
@@ -334,45 +379,6 @@ void lisp_val_print(struct lisp_val this, FILE *f) {
 			string_print(this.as.string, f);
 		} break;
 	}
-}
-
-struct string_builder {
-	char *items;
-	size_t count;
-	size_t capacity;
-};
-void sb_addb(struct string_builder *sb, const char *b, size_t l) {
-	if (sb->capacity == 0) {
-		assert(sb->items == NULL);
-
-		sb->items = malloc(16);
-		sb->count = 0;
-		sb->capacity = 16;
-	}
-
-	while (l + sb->count > sb->capacity) {
-		sb->capacity *= 2;
-		sb->items = realloc(sb->items, sb->capacity);
-	}
-
-	if (l == 0) return;
-	if (l == 1) {
-		sb->items[sb->count++] = *b;
-		return;
-	}
-
-	memcpy(&sb->items[sb->count], b, l);
-	sb->count += l;
-}
-void sb_adds(struct string_builder *sb, const char *s) {
-	sb_addb(sb, s, strlen(s));
-}
-void sb_addc(struct string_builder *sb, char c) {
-	sb_addb(sb, &c, 1);
-}
-void sb_clear(struct string_builder *sb) {
-	if (sb->items) free(sb->items);
-	*sb = (struct string_builder) {0};
 }
 
 string_t sb_to_string(struct string_builder *sb) {
@@ -1634,21 +1640,9 @@ struct call_res lreadline(list_t args) {
 
 	struct string_builder sb = {0};
 
-	bool eof = false;
+	enum input_status is = input(&sb, f);
 
-	for (;;) {
-		const int inp = getc(f);
-		if (inp == EOF) {
-			eof = true;
-			break;
-		}
-		if (inp == '\n') {
-			break;
-		}
-		sb_addc(&sb, inp);
-	}
-
-	if (sb.count == 0 && eof) {
+	if (is == IS_EOF && sb.count == 0) {
 		lret(nil);
 	}
 
@@ -2303,16 +2297,14 @@ finish:
 void run_repl(void) {
 	enum input_status input_status;
 	for (;;) {
-		input_status = input("> ", buf, MAX_LINE_LEN, stdin);
-		if (input_status == IS_EOF) {
+		fputs("> ", stdout);
+		input_status = input(&line_builder, stdin);
+		if (input_status == IS_EOF && line_builder.count == 0) {
 			break;
-		} else if (input_status == IS_LINE_TOO_LONG) {
-			printf("ERROR: Longest supported line is %d characters\n", MAX_LINE_LEN);
-			continue;
 		}
 
-		line = buf;
-		line_len = strlen(line);
+		line = line_builder.items;
+		line_len = line_builder.count;
 
 		// cast &line to (void*) to side-step incorrect constness warnings from the compiler
 		struct lisp_val parsed = lisp_val_parse((void*)&line, &line_len);
