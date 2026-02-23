@@ -1904,6 +1904,249 @@ struct call_res lffi_sym(list_t args) {
 	lret(nil);
 }
 
+enum ctype_basic {
+	CT_I8,
+	CT_U8,
+	CT_I32,
+	CT_U32,
+	CT_I64,
+	CT_U64,
+	CT_F32,
+	CT_F64,
+	CT_PTR,
+	CT_VOID,
+	CT_STRUCT,
+};
+
+size_t ctype_size[CT_STRUCT+1] = {
+	[CT_I8] = 1,
+	[CT_U8] = 1,
+	[CT_I32] = 4,
+	[CT_U32] = 4,
+	[CT_I64] = 8,
+	[CT_U64] = 8,
+	[CT_F32] = 4,
+	[CT_F64] = 8,
+	[CT_PTR] = 8,
+	[CT_VOID] = 0,
+	[CT_STRUCT] = -1,
+};
+
+struct ctype {
+	enum ctype_basic basic_type;
+	union {
+		// WARNING: list is not copied!
+		list_t struct_members;
+	} inner_desc;
+};
+
+struct ctype parse_ctype(struct lisp_val val) {
+	if (val.type != LT_SYM && val.type != LT_LIST) {
+		fputs("C types should either be a symbol, nil, or a list of C types!\n", stderr);
+		exit(1);
+	}
+
+	if (val.type == LT_SYM) {
+		if (strcmp(val.as.sym->sym, "i8") == 0) {
+			return (struct ctype) { .basic_type = CT_I8 };
+		} else if (strcmp(val.as.sym->sym, "u8") == 0) {
+			return (struct ctype) { .basic_type = CT_U8 };
+		} else if (strcmp(val.as.sym->sym, "i32") == 0) {
+			return (struct ctype) { .basic_type = CT_I32 };
+		} else if (strcmp(val.as.sym->sym, "u32") == 0) {
+			return (struct ctype) { .basic_type = CT_U32 };
+		} else if (strcmp(val.as.sym->sym, "i64") == 0) {
+			return (struct ctype) { .basic_type = CT_I64 };
+		} else if (strcmp(val.as.sym->sym, "u64") == 0) {
+			return (struct ctype) { .basic_type = CT_U64 };
+		} else if (strcmp(val.as.sym->sym, "f32") == 0) {
+			return (struct ctype) { .basic_type = CT_F32 };
+		} else if (strcmp(val.as.sym->sym, "f64") == 0) {
+			return (struct ctype) { .basic_type = CT_F64 };
+		} else if (strcmp(val.as.sym->sym, "ptr") == 0) {
+			return (struct ctype) { .basic_type = CT_PTR };
+		} else {
+			fprintf(stderr, "Unknown C type `%s`\n", val.as.sym->sym);
+			exit(1);
+		}
+	} else {
+		// val.type == LT_LIST
+
+		if (val.as.list == NULL) {
+			return (struct ctype) { .basic_type = CT_VOID };
+		}
+
+		return (struct ctype) { .basic_type = CT_STRUCT, .inner_desc.struct_members = val.as.list, };
+	}
+}
+
+size_t get_struct_size(list_t struct_members) {
+	size_t res = 0;
+
+	while (struct_members) {
+		struct ctype type = parse_ctype(struct_members->val);
+
+		if (type.basic_type == CT_VOID) {
+			fputs("Void type should never be a struct member!\n", stderr);
+			exit(1);
+		}
+
+		if (type.basic_type == CT_STRUCT) {
+			if (res % 8) res += res % 8; // alignment
+			res += get_struct_size(type.inner_desc.struct_members);
+		} else {
+			const size_t size = ctype_size[type.basic_type];
+			if (res % size) res += res % size; // alignment
+			res += size;
+		}
+	}
+
+	return res;
+}
+
+size_t construct_cval_into(struct ctype type, struct lisp_val from, void *memory) {
+	switch (type.basic_type) {
+		case CT_I8: {
+			assert(from.type == LT_NUM);
+			assert(-(1<<7) <= from.as.num && from.as.num < (1<<7));
+
+			*(int8_t*)memory = from.as.num;
+			return ctype_size[CT_I8];
+		} break;
+		case CT_U8: {
+			assert(from.type == LT_NUM);
+			assert(0 <= from.as.num && from.as.num < (1<<8));
+
+			*(uint8_t*)memory = from.as.num;
+			return ctype_size[CT_U8];
+		} break;
+		case CT_I32: {
+			assert(from.type == LT_NUM);
+			assert(-(1l<<31) <= from.as.num && from.as.num < (1l<<31));
+
+			*(int32_t*)memory = from.as.num;
+			return ctype_size[CT_I32];
+		} break;
+		case CT_U32: {
+			assert(from.type == LT_NUM);
+			assert(0 <= from.as.num && from.as.num < (1l<<32));
+
+			*(uint32_t*)memory = from.as.num;
+			return ctype_size[CT_U32];
+		} break;
+		case CT_I64: {
+			assert(from.type == LT_NUM);
+
+			*(i64*)memory = from.as.num;
+			return ctype_size[CT_I64];
+		} break;
+		case CT_U64: {
+			assert(from.type == LT_NUM);
+
+			*(u64*)memory = *(u64*)&from.as.num;
+			return ctype_size[CT_U64];
+		} break;
+		case CT_F32: {
+			// TODO:
+			fputs("Handling of C floats not yet implemented\n", stderr);
+			exit(1);
+		} break;
+		case CT_F64: {
+			// TODO:
+			fputs("Handling of C floats not yet implemented\n", stderr);
+			exit(1);
+		} break;
+		case CT_PTR: {
+			// TODO:
+			fputs("Handling of pointers not yet implemented\n", stderr);
+			exit(1);
+		} break;
+		case CT_VOID: {
+			fputs("Void type cannot be constructed in memory!\n", stderr);
+			exit(1);
+		} break;
+		case CT_STRUCT: {
+			assert(from.type == LT_LIST);
+
+			list_t struct_member_types = type.inner_desc.struct_members;
+			list_t struct_member_values = from.as.list;
+
+			size_t size_so_far = 0;
+
+			while (struct_member_types != NULL) {
+				assert(struct_member_values != NULL);
+
+				struct ctype member_type = parse_ctype(struct_member_types->val);
+
+				if (type.basic_type == CT_VOID) {
+					fputs("Void type should never be a struct member!\n", stderr);
+					exit(1);
+				}
+
+				// alignment
+				if (type.basic_type == CT_STRUCT) {
+					if (size_so_far % 8) {
+						memory += size_so_far % 8;
+						size_so_far += size_so_far % 8;
+					}
+				} else {
+					const size_t size = ctype_size[type.basic_type];
+					if (size_so_far % size) {
+						memory += size_so_far % size;
+						size_so_far += size_so_far % size;
+					}
+				}
+
+				const size_t val_size = construct_cval_into(
+					member_type,
+					struct_member_values->val,
+					memory
+				);
+				size_so_far += val_size;
+				memory += val_size;
+
+				struct_member_types = struct_member_types->next;
+				struct_member_values = struct_member_values->next;
+			}
+			assert(struct_member_values == NULL);
+
+			return size_so_far;
+		} break;
+	}
+}
+
+void *create_cval(struct ctype type, struct lisp_val from) {
+	void *val;
+	if (type.basic_type == CT_VOID) {
+		fputs("Void type should never be passed as a parameter!\n", stderr);
+		exit(1);
+	} else if (type.basic_type == CT_STRUCT) {
+		const size_t struct_size = get_struct_size(type.inner_desc.struct_members);
+
+		val = malloc(struct_size);
+	} else val = malloc(ctype_size[type.basic_type]);
+	construct_cval_into(type, from, val);
+	return val;
+}
+
+struct call_res lffi_call(list_t args) {
+	assert(args != NULL);
+	assert(args->val.type == LT_LIST);
+	assert(args->val.as.list != NULL);
+	assert(args->val.as.list->val.type == LT_SYM);
+	assert(strcmp(args->val.as.list->val.as.sym->sym, "csym") == 0);
+	assert(args->val.as.list->next != NULL);
+	assert(args->val.as.list->next->val.type == LT_NUM);
+	assert(args->val.as.list->next->next == NULL);
+	assert(args->next != NULL);
+
+	void *func = *(void**)&args->val.as.list->next->val.as.num;
+
+	// TODO:
+
+	lret(nil);
+}
+
 struct {
 	const char *name;
 	struct lbuiltin fn;
@@ -2083,7 +2326,7 @@ struct {
 	{ "!ffi-sym", { lffi_sym, true, NULL,
 		"  library fnname -> tries to load the given name from the given C library, returning (' csym <id>) on success or a string containing the error on failure"
 	} },
-	/*{ "!ffi-call", { lffi_call, true, NULL,
+	{ "!ffi-call", { lffi_call, true, NULL,
 		"  csym ret-type args... -> calls the given C function with the given return type and the given arguments, arguments given first as a type, then a value\n"
 		"  The following C types are supported:\n"
 		"    i8    8-bit signed integer, value is a number\n"
@@ -2097,7 +2340,7 @@ struct {
 		"    ptr   pointer, value is a pair (' ptr number)\n"
 		"    void  no value; should only be used as a return type, gives () as a result\n"
 		"    (...) a structure with elements of the given types, value is a list with the same format"
-	} },*/
+	} },
 };
 
 struct lisp_val last_res;
