@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <string.h>
+#include <dlfcn.h>
 
 typedef int64_t i64;
 typedef uint64_t u64;
@@ -1814,6 +1815,53 @@ struct call_res llen_s(list_t args) {
 	}));
 }
 
+struct call_res lffi_load(list_t args) {
+	assert(args != NULL);
+	assert(args->val.type == LT_STRING);
+	assert(args->next == NULL);
+
+	char *libname = strndup(args->val.as.string->data, args->val.as.string->len);
+	void *lib = dlopen(libname, RTLD_LAZY | RTLD_GLOBAL);
+	free(libname);
+
+	if (lib == NULL) {
+		lret(((struct lisp_val) {
+			.type = LT_STRING,
+			.as.string = string_from_str(dlerror()),
+		}));
+	} else {
+		list_t res = NULL;
+		res = list_cons((struct lisp_val) {
+			.type = LT_NUM,
+			.as.num = *(i64*)&lib,
+		}, res);
+		res = list_cons((struct lisp_val) {
+			.type = LT_SYM,
+			.as.sym = sym_from_str("clib"),
+		}, res);
+		lret(((struct lisp_val) {
+			.type = LT_LIST,
+			.as.list = res,
+		}));
+	}
+}
+
+struct call_res lffi_unload(list_t args) {
+	assert(args != NULL);
+	assert(args->val.type == LT_LIST);
+	assert(args->val.as.list != NULL);
+	assert(args->val.as.list->val.type == LT_SYM);
+	assert(strcmp(args->val.as.list->val.as.sym->sym, "clib") == 0);
+	assert(args->val.as.list->next != NULL);
+	assert(args->val.as.list->next->val.type == LT_NUM);
+	assert(args->val.as.list->next->next == NULL);
+	assert(args->next == NULL);
+
+	dlclose(*(void**)&args->val.as.list->next->val.as.num);
+
+	lret(nil);
+}
+
 struct {
 	const char *name;
 	struct lbuiltin fn;
@@ -1984,6 +2032,30 @@ struct {
 	{ "len$", { llen_s, true, NULL,
 		"  string -> the length of the string"
 	} },
+	{ "!ffi-load", { lffi_load, true, NULL,
+		"  libname -> tries to load the specified C library, returning (' clib <id>) on success or a string containing the error on failure"
+	} },
+	{ "!ffi-unload", { lffi_unload, true, NULL,
+		"  library -> unloads the given C library"
+	} },
+	/*{ "!ffi-sym", { lffi_sym, true, NULL,
+		"  library fnname -> tries to load the given name from the given C library, returning (' csym <id>) on success or a string containing the error on failure"
+	} },
+	{ "!ffi-call", { lffi_call, true, NULL,
+		"  csym ret-type args... -> calls the given C function with the given return type and the given arguments, arguments given first as a type, then a value\n"
+		"  The following C types are supported:\n"
+		"    i8    8-bit signed integer, value is a number\n"
+		"    u8    8-bit unsigned integer, value is a number\n"
+		"    i32   32-bit signed integer, value is a number\n"
+		"    u32   32-bit unsigned integer, value is a number\n"
+		"    i64   64-bit signed integer, value is a number\n"
+		"    u64   64-bit unsigned integer, value is a number\n"
+		"    f32   32-bit floating-point number, value is a number\n"
+		"    f64   64-bit floating-point number, value is a number\n"
+		"    ptr   pointer, value is a pair (' ptr number)\n"
+		"    void  no value; should only be used as a return type, gives () as a result\n"
+		"    (...) a structure with elements of the given types, value is a list with the same format"
+	} },*/
 };
 
 struct lisp_val last_res;
