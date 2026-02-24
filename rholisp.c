@@ -2357,6 +2357,27 @@ finish:
 	lret(ret);
 }
 
+struct call_res lstring_data_ptr(list_t args) {
+	assert(args != NULL);
+	assert(args->val.type == LT_STRING);
+	assert(args->next == NULL);
+
+	list_t res = NULL;
+	res = list_cons((struct lisp_val) {
+		.type = LT_NUM,
+		.as.num = *(i64*)&args->val.as.string->data,
+	 }, res);
+	res = list_cons((struct lisp_val) {
+		.type = LT_SYM,
+		.as.sym = sym_from_str("pointer"),
+	 }, res);
+
+	lret(((struct lisp_val) {
+		.type = LT_LIST,
+		.as.list = res,
+	}));
+}
+
 struct {
 	const char *name;
 	struct lbuiltin fn;
@@ -2550,6 +2571,9 @@ struct {
 		"    ptr   pointer, value is a pair (' ptr number)\n"
 		"    void  no value; should only be used as a return type, gives () as a result\n"
 		"    (...) a structure with elements of the given types, value is a list with the same format"
+	} },
+	{ "!string-data-pointer", { lstring_data_ptr, true, NULL,
+		"  string -> (pointer <pointer-to-string-data)"
 	} },
 };
 

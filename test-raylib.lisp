@@ -3,7 +3,8 @@
 
 ; (InitWindow 800 600 "Hello World Window")
 (println "Creating window...")
-(InitWindow 800 600 0)
+(def title "Test Window\0")
+(InitWindow 800 600 (scd (!string-data-pointer title)))
 
 (SetTargetFPS 24)
 
@@ -14,6 +15,15 @@
 
     ; (println "Clearing background...")
     (ClearBackground (Color r g b 255))
+
+    (def text "Hello, world!\0")
+    (DrawText
+      (scd (!string-data-pointer text))
+      (- 400 (/ (MeasureText (scd (!string-data-pointer text)) 32) 2))
+      200
+      32
+      (Color (- 255 r) (- 255 g) (- 255 b) 255)
+    )
 
     ; (println "Ending drawing...")
     (EndDrawing)

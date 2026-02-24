@@ -47,3 +47,5 @@
 (.raylib.define-func ClearBackground (color) () (struct-Color))
 (.raylib.define-func SetTargetFPS (fps) () (' i32))
 (.raylib.define-func WindowShouldClose () ' i32 ())
+(.raylib.define-func DrawText (text posX posY fontSize color) () (' u64 ' i32 ' i32 ' i32 struct-Color))
+(.raylib.define-func MeasureText (text fontSize) ' i32 (' u64 ' i32))
