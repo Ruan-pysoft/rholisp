@@ -2097,7 +2097,7 @@ size_t construct_cval_into(struct ctype type, struct lisp_val from, void *memory
 
 			size_t size_so_far = 0;
 
-			const void *const orig_mem = memory;
+			//const void *const orig_mem = memory;
 
 			while (struct_member_types != NULL) {
 				assert(struct_member_values != NULL);

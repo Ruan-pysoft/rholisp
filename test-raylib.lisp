@@ -5,18 +5,27 @@
 (println "Creating window...")
 (InitWindow 800 600 0)
 
-(println "Beginning drawing...")
-(BeginDrawing)
+(SetTargetFPS 24)
 
-(println "Clearing background...")
-(println "  with color:" (Color 170 51 34 255))
-(debug (ClearBackground (Color 170 51 34 255)))
+(tmpfn (r g b)
+  (if (not (WindowShouldClose)) (do
+    ; (println "Beginning drawing...")
+    (BeginDrawing)
 
-(println "Ending drawing...")
-(EndDrawing)
+    ; (println "Clearing background...")
+    (ClearBackground (Color r g b 255))
 
-(println "Sleeping...")
-(debug (!ffi-call (!ffi-sym (!ffi-load "libc.so.6") "sleep") ' u32 ' u32 2))
+    ; (println "Ending drawing...")
+    (EndDrawing)
+
+    (rec
+      (% (+ r 1) 256)
+      (% (+ g 3) 256)
+      (% (+ b 5) 256)
+    )
+  ))
+  (170 51 34)
+)
 
 (println "Closing window...")
 (CloseWindow)

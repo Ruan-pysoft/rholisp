@@ -45,3 +45,5 @@
 (.raylib.define-func BeginDrawing () () ())
 (.raylib.define-func EndDrawing () () ())
 (.raylib.define-func ClearBackground (color) () (struct-Color))
+(.raylib.define-func SetTargetFPS (fps) () (' i32))
+(.raylib.define-func WindowShouldClose () ' i32 ())
