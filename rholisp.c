@@ -2021,6 +2021,8 @@ size_t get_struct_size(list_t struct_members) {
 			if (res % size) res += res % size; // alignment
 			res += size;
 		}
+
+		struct_members = struct_members->next;
 	}
 
 	return res;
@@ -2095,24 +2097,26 @@ size_t construct_cval_into(struct ctype type, struct lisp_val from, void *memory
 
 			size_t size_so_far = 0;
 
+			const void *const orig_mem = memory;
+
 			while (struct_member_types != NULL) {
 				assert(struct_member_values != NULL);
 
 				struct ctype member_type = parse_ctype(struct_member_types->val);
 
-				if (type.basic_type == CT_VOID) {
+				if (member_type.basic_type == CT_VOID) {
 					fputs("Void type should never be a struct member!\n", stderr);
 					exit(1);
 				}
 
 				// alignment
-				if (type.basic_type == CT_STRUCT) {
+				if (member_type.basic_type == CT_STRUCT) {
 					if (size_so_far % 8) {
 						memory += size_so_far % 8;
 						size_so_far += size_so_far % 8;
 					}
 				} else {
-					const size_t size = ctype_size[type.basic_type];
+					const size_t size = ctype_size[member_type.basic_type];
 					if (size_so_far % size) {
 						memory += size_so_far % size;
 						size_so_far += size_so_far % size;
@@ -2131,6 +2135,12 @@ size_t construct_cval_into(struct ctype type, struct lisp_val from, void *memory
 				struct_member_values = struct_member_values->next;
 			}
 			assert(struct_member_values == NULL);
+
+			/*if (size_so_far >= 8) {
+				fprintf(stderr, "Constructed struct of size %lu with first eight bytes: %lx\n", size_so_far, *(u64*)orig_mem);
+			} else if (size_so_far == 4) {
+				fprintf(stderr, "Constructed struct of size %lu with first four bytes: %x\n", size_so_far, *(uint32_t*)orig_mem);
+			}*/
 
 			return size_so_far;
 		} break;
@@ -2154,7 +2164,7 @@ void *create_cval(struct ctype type, struct lisp_val from) {
 }
 
 ffi_type *ctype_to_ffi_type(struct ctype ctype) {
-	ffi_type *res;
+	ffi_type *res = NULL;
 
 	switch (ctype.basic_type) {
 		case CT_I8: {
@@ -2193,9 +2203,9 @@ ffi_type *ctype_to_ffi_type(struct ctype ctype) {
 				ffi_type **items;
 				size_t count;
 				size_t capacity;
-			} elements;
+			} elements = {0};
 
-			for (list_t member = ctype.inner_desc.struct_members; member != NULL; ++member) {
+			for (list_t member = ctype.inner_desc.struct_members; member != NULL; member = member->next) {
 				struct ctype member_type = parse_ctype(member->val);
 				ffi_type *ffi_type = ctype_to_ffi_type(member_type);
 				da_append(&elements, ffi_type);
@@ -2213,7 +2223,7 @@ ffi_type *ctype_to_ffi_type(struct ctype ctype) {
 }
 void free_ffi_type(ffi_type *type) {
 	if (type != NULL && type->type == FFI_TYPE_STRUCT) {
-		for (ffi_type **st = type->elements; st != NULL; ++st) {
+		for (ffi_type **st = type->elements; *st != NULL; ++st) {
 			free_ffi_type(*st);
 		}
 		free(type->elements);
