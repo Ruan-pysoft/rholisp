@@ -11,7 +11,6 @@ There are two ways to run this program. You may either compile it first into an 
 To compile and run, most C compilers should work, assuming the relevant headers are available (which I believe should be the case on Linux, BSD, and MacOS). You just need to feed the `rholisp.c` file to your compiler, and instruct it to link to [libffi](https://en.wikipedia.org/wiki/Libffi).
 
 Note however, that the original implementation was tested only on Termux with gcc, and that the current implementation has only been tested on my laptop with gcc.
-Note however, that I have thus far only tested it on Termux with gcc.
 
 ```
 $ gcc -Wall -Wextra -Wno-override-init rholisp.c -o rho -lffi
