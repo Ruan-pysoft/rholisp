@@ -2221,6 +2221,64 @@ void free_ffi_type(ffi_type *type) {
 	}
 }
 
+struct lisp_val cval_to_lisp_val(struct ctype type, ffi_arg *cval) {
+	switch (type.basic_type) {
+		case CT_VOID: {
+			return nil;
+		} break;
+		case CT_I8: {
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(int8_t*)cval,
+			};
+		} break;
+		case CT_U8: {
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(uint8_t*)cval,
+			};
+		} break;
+		case CT_I32: {
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(int32_t*)cval,
+			};
+		} break;
+		case CT_U32: {
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(uint32_t*)cval,
+			};
+		} break;
+		case CT_I64:
+		case CT_U64:
+		{
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(i64*)cval,
+			};
+		} break;
+		case CT_F32: {
+			fputs("error: ffi float handling not implemented yet!\n", stderr);
+			exit(1);
+		} break;
+		case CT_F64: {
+			fputs("error: ffi float handling not implemented yet!\n", stderr);
+			exit(1);
+		} break;
+		case CT_PTR: {
+			fputs("error: ffi pointer handling not implemented yet!\n", stderr);
+			exit(1);
+		} break;
+		case CT_STRUCT: {
+			fputs("error: ffi struct handling not implemented yet!\n", stderr);
+			exit(1);
+		} break;
+	}
+
+	assert(false && "not implemented yet!");
+}
+
 struct call_res lffi_call(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_LIST);
@@ -2273,15 +2331,7 @@ struct call_res lffi_call(list_t args) {
 
 	ffi_call(&cif, func, &return_val, cvals.items);
 
-	switch (return_type.basic_type) {
-		case CT_VOID: {
-			// ret stays nil
-		} break;
-		default: {
-			fputs("error: non-void return types not supported yet!\n", stderr);
-			exit(1);
-		} break;
-	}
+	ret = cval_to_lisp_val(return_type, &return_val);
 
 finish:
 	da_foreach(&cargs, ffi_type *, it) {
@@ -2292,6 +2342,7 @@ finish:
 		free(*it);
 	}
 	da_free(&cvals);
+	free_ffi_type(ffi_return_type);
 
 	lret(ret);
 }
