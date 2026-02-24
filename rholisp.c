@@ -2234,6 +2234,7 @@ struct call_res lffi_call(list_t args) {
 
 	void *func = *(void**)&args->val.as.list->next->val.as.num;
 
+	ffi_cif cif;
 	struct {
 		ffi_type **items;
 		size_t capacity;
@@ -2245,6 +2246,7 @@ struct call_res lffi_call(list_t args) {
 		size_t count;
 	} cvals = {0};
 	struct ctype return_type = parse_ctype(args->next->val);
+	ffi_type *ffi_return_type = ctype_to_ffi_type(return_type);
 	ffi_arg return_val;
 
 	args = args->next->next;
@@ -2260,8 +2262,28 @@ struct call_res lffi_call(list_t args) {
 		args = args->next->next;
 	}
 
-	fprintf(stderr, "Calling function %p with %lu arguments...\n", func, cargs.count);
+	struct lisp_val ret = nil;
 
+	// fprintf(stderr, "Calling function %p with %lu arguments...\n", func, cargs.count);
+	if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, cargs.count, ffi_return_type, cargs.items) != FFI_OK) {
+		// function call failed
+		// TODO: some sort of better error reporting mechanism?
+		goto finish;
+	}
+
+	ffi_call(&cif, func, &return_val, cvals.items);
+
+	switch (return_type.basic_type) {
+		case CT_VOID: {
+			// ret stays nil
+		} break;
+		default: {
+			fputs("error: non-void return types not supported yet!\n", stderr);
+			exit(1);
+		} break;
+	}
+
+finish:
 	da_foreach(&cargs, ffi_type *, it) {
 		free_ffi_type(*it);
 	}
@@ -2271,7 +2293,7 @@ struct call_res lffi_call(list_t args) {
 	}
 	da_free(&cvals);
 
-	lret(nil);
+	lret(ret);
 }
 
 struct {
