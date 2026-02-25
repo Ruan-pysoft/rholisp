@@ -2081,9 +2081,15 @@ size_t construct_cval_into(struct ctype type, struct lisp_val from, void *memory
 			exit(1);
 		} break;
 		case CT_PTR: {
-			// TODO:
-			fputs("Handling of pointers not yet implemented\n", stderr);
-			exit(1);
+			assert(from.type == LT_LIST);
+			assert(from.as.list != NULL);
+			assert(from.as.list->val.type == LT_SYM);
+			assert(strcmp(from.as.list->val.as.sym->sym, "pointer") == 0);
+			assert(from.as.list->next->val.type == LT_NUM);
+			assert(from.as.list->next->next == NULL);
+
+			*(void**)memory = *(void**)&from.as.list->next->val.as.num;
+			return ctype_size[CT_PTR];
 		} break;
 		case CT_VOID: {
 			fputs("Void type cannot be constructed in memory!\n", stderr);
@@ -2143,6 +2149,89 @@ size_t construct_cval_into(struct ctype type, struct lisp_val from, void *memory
 			}*/
 
 			return size_so_far;
+		} break;
+	}
+
+	assert(false && "unreachable");
+}
+
+struct lisp_val destruct_cval_from(struct ctype type, void *memory, size_t *size) {
+	switch (type.basic_type) {
+		case CT_I8: {
+			*size = ctype_size[CT_I8];
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(int8_t*)memory,
+			};
+		} break;
+		case CT_U8: {
+			*size = ctype_size[CT_U8];
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(uint8_t*)memory,
+			};
+		} break;
+		case CT_I32: {
+			*size = ctype_size[CT_I32];
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(int32_t*)memory,
+			};
+		} break;
+		case CT_U32: {
+			*size = ctype_size[CT_U32];
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(uint32_t*)memory,
+			};
+		} break;
+		case CT_I64: {
+			*size = ctype_size[CT_I64];
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(i64*)memory,
+			};
+		} break;
+		case CT_U64: {
+			*size = ctype_size[CT_U64];
+			return (struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(i64*)memory,
+			};
+		} break;
+		case CT_F32: {
+			// TODO:
+			fputs("Handling of C floats not yet implemented\n", stderr);
+			exit(1);
+		} break;
+		case CT_F64: {
+			// TODO:
+			fputs("Handling of C floats not yet implemented\n", stderr);
+			exit(1);
+		} break;
+		case CT_PTR: {
+			// fprintf(stderr, "Constructing pointer from memory location %p to get value %p.\n", memory, *(void**)memory);
+			*size = ctype_size[CT_PTR];
+			list_t res = NULL;
+			res = list_cons((struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(i64*)memory,
+			}, res);
+			res = list_cons((struct lisp_val) {
+				.type = LT_SYM,
+				.as.sym = sym_from_str("pointer"),
+			}, res);
+			return (struct lisp_val) {
+				.type = LT_LIST,
+				.as.list = res,
+			};
+		} break;
+		case CT_VOID: {
+			fputs("Void type cannot be constructed in memory!\n", stderr);
+			exit(1);
+		} break;
+		case CT_STRUCT: {
+			assert(false && "TODO");
 		} break;
 	}
 
@@ -2277,8 +2366,19 @@ struct lisp_val cval_to_lisp_val(struct ctype type, ffi_arg *cval) {
 			exit(1);
 		} break;
 		case CT_PTR: {
-			fputs("error: ffi pointer handling not implemented yet!\n", stderr);
-			exit(1);
+			list_t res = NULL;
+			res = list_cons((struct lisp_val) {
+				.type = LT_NUM,
+				.as.num = *(i64*)cval,
+			}, res);
+			res = list_cons((struct lisp_val) {
+				.type = LT_SYM,
+				.as.sym = sym_from_str("pointer"),
+			}, res);
+			return (struct lisp_val) {
+				.type = LT_LIST,
+				.as.list = res,
+			};
 		} break;
 		case CT_STRUCT: {
 			fputs("error: ffi struct handling not implemented yet!\n", stderr);
@@ -2375,6 +2475,64 @@ struct call_res lstring_data_ptr(list_t args) {
 	lret(((struct lisp_val) {
 		.type = LT_LIST,
 		.as.list = res,
+	}));
+}
+
+struct call_res lconstruct_val(list_t args) {
+	assert(args != NULL);
+	assert(args->val.type == LT_LIST);
+	assert(args->val.as.list != NULL);
+	assert(args->val.as.list->val.type == LT_SYM);
+	assert(strcmp(args->val.as.list->val.as.sym->sym, "pointer") == 0);
+	assert(args->val.as.list->next != NULL);
+	assert(args->val.as.list->next->val.type == LT_NUM);
+	assert(args->val.as.list->next->next == NULL);
+	assert(args->next != NULL);
+	assert(args->next->next != NULL);
+	assert(args->next->next->next == NULL);
+
+	struct ctype type = parse_ctype(args->next->val);
+
+	const size_t size = construct_cval_into(
+		type,
+		args->next->next->val,
+		*(void**)&args->val.as.list->next->val.as.num
+	);
+
+	lret(((struct lisp_val) {
+		.type = LT_NUM,
+		.as.num = *(i64*)&size,
+	}));
+}
+
+struct call_res ldestruct_val(list_t args) {
+	assert(args != NULL);
+	assert(args->val.type == LT_LIST);
+	assert(args->val.as.list != NULL);
+	assert(args->val.as.list->val.type == LT_SYM);
+	assert(strcmp(args->val.as.list->val.as.sym->sym, "pointer") == 0);
+	assert(args->val.as.list->next != NULL);
+	assert(args->val.as.list->next->val.type == LT_NUM);
+	assert(args->val.as.list->next->next == NULL);
+	assert(args->next != NULL);
+	assert(args->next->next == NULL);
+
+	struct ctype type = parse_ctype(args->next->val);
+
+	size_t read_size = 0;
+	struct lisp_val val = destruct_cval_from(
+		type,
+		*(void**)&args->val.as.list->next->val.as.num,
+		&read_size
+	);
+	struct lisp_val val_size = (struct lisp_val) {
+		.type = LT_NUM,
+		.as.num = *(i64*)&read_size,
+	};
+
+	lret(((struct lisp_val) {
+		.type = LT_LIST,
+		.as.list = list_cons(val, list_cons(val_size, NULL)),
 	}));
 }
 
@@ -2574,6 +2732,12 @@ struct {
 	} },
 	{ "!string-data-pointer", { lstring_data_ptr, true, NULL,
 		"  string -> (pointer <pointer-to-string-data)"
+	} },
+	{ "!construct-val", { lconstruct_val, true, NULL,
+		"  pointer type value -> construct the C type from the given value in the specified memory location"
+	} },
+	{ "!destruct-val", { ldestruct_val, true, NULL,
+		"  pointer type -> dereference the pointer of the given type, returning the value"
 	} },
 };
 
