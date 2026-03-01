@@ -27,9 +27,10 @@ typedef uint64_t u64;
 		if ((amount) == 0) break; \
 		if ((amount) == 1) { \
 			(da)->items[(da)->count++] = *(things); \
+		} else { \
+			memcpy(&(da)->items[(da)->count], (things), (amount)); \
+			(da)->count += (amount); \
 		} \
-		memcpy(&(da)->items[(da)->count], (things), (amount)); \
-		(da)->count += (amount); \
 	} while (0)
 #define da_append(da, thing) do { \
 		if ((da)->capacity == 0) { \
