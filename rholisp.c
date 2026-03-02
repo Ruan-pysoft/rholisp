@@ -107,14 +107,23 @@ enum input_status input(struct string_builder *line_builder, FILE *infile) {
 
 /* SECTION: LISP TYPES AND VALUES (DECLARATION) */
 
+#define LIST_OF_LISP_TYPES     \
+	X(number,  LT_NUMBER)  \
+	X(builtin, LT_BUILTIN) \
+	X(symbol,  LT_SYMBOL)  \
+	X(list,    LT_LIST)    \
+	X(boolean, LT_BOOLEAN) \
+	X(string,  LT_STRING)
+#define LIST_OF_GCD_TYPES    \
+	X(symbol, LT_SYMBOL) \
+	X(list,   LT_LIST)   \
+	X(string, LT_STRING)
+
 // the types said value can take on
 enum lisp_type {
-	LT_NUM,
-	LT_BUILTIN,
-	LT_SYM,
-	LT_LIST,
-	LT_BOOLEAN,
-	LT_STRING,
+#define X(_, enum_name) enum_name,
+	LIST_OF_LISP_TYPES
+#undef X
 };
 
 // GARBAGE COLLECTION
@@ -144,129 +153,61 @@ enum cmp_result {
 // the c types for each lisp type (declaration)
 
 struct value;
+typedef struct value lisp_value_t;
+
+typedef i64 lisp_number_t;
+
+struct builtin;
+typedef struct builtin *builtin_t;
+typedef builtin_t lisp_builtin_t;
+
+struct symbol;
+typedef struct symbol *symbol_t;
+typedef symbol_t lisp_symbol_t;
+
+struct list;
+typedef struct list *list_t;
+typedef list_t lisp_list_t;
+
+typedef bool lisp_boolean_t;
+
+struct string;
+typedef struct string *string_t;
+typedef string_t lisp_string_t;
+
+enum cmp_result value_cmp(const lisp_value_t lhs, const lisp_value_t rhs);
+#define X(type_name, _) \
+enum cmp_result type_name ## _cmp(const lisp_ ## type_name ## _t lhs, const lisp_ ## type_name ## _t rhs);
+LIST_OF_LISP_TYPES
+#undef X
+
 void gc_increfs_value(struct value this);
 void gc_decrefs_value(struct value this);
 void value_destroy(struct value this);
 struct value value_copy(struct value this);
-enum cmp_result value_cmp(struct value lhs, struct value rhs);
-
-typedef struct value lisp_value_t;
-
-enum cmp_result i64_cmp(i64 lhs, i64 rhs);
-
-typedef i64 lisp_num_t;
-
-
-struct builtin;
-typedef struct builtin *builtin_t;
-enum cmp_result builtin_cmp(const builtin_t lhs, const builtin_t rhs);
-
-typedef builtin_t lisp_builtin_t;
-
-
-struct symbol;
-typedef struct symbol *symbol_t;
-void symbol_destroy(symbol_t this);
-enum cmp_result symbol_cmp(const symbol_t lhs, const symbol_t rhs);
-
-typedef symbol_t lisp_sym_t;
-
-
-struct list;
-typedef struct list *list_t;
-void list_destroy(list_t this);
-enum cmp_result list_cmp(const list_t lhs, const list_t rhs);
-
-typedef list_t lisp_list_t;
-
-
-enum cmp_result boolean_cmp(bool lhs, bool rhs);
-
-typedef bool lisp_boolean_t;
-
-
-struct string;
-typedef struct string *string_t;
-void string_destroy(string_t this);
-enum cmp_result string_cmp(const string_t lhs, const string_t rhs);
-
-typedef string_t lisp_string_t;
-
-/* SECTION: LISP TYPES AND VALUES (DEFINITION) */
+#define X(type_name, _) \
+void type_name ## _destroy(lisp_ ## type_name ## _t this); \
+lisp_ ## type_name ## _t type_name ## _copy(lisp_ ## type_name ## _t this);
+LIST_OF_GCD_TYPES
+#undef X
 
 // LISP VALUES
 
-struct value {
-	enum lisp_type type;
-	union {
-		lisp_num_t num;
-		lisp_builtin_t builtin;
-		lisp_sym_t sym;
-		lisp_list_t list;
-		lisp_boolean_t boolean;
-		lisp_string_t string;
-	} as;
-};
+// + init +
 
-void value_destroy(struct value this) {
-	switch (this.type) {
-		case LT_SYM: {
-			symbol_destroy(this.as.sym);
-		} break;
-		case LT_LIST: {
-			list_destroy(this.as.list);
-		} break;
-		case LT_STRING: {
-			string_destroy(this.as.string);
-		} break;
-		default: break;
-	}
-}
-struct value value_copy(struct value this) {
-	gc_increfs_value(this);
-	return this;
-}
-
-// init
 // WARNING: NO INCREASING OF REFCOUNTS ARE DONE IN THESE INITIALISERS!
-#define define_value_init_of(type_name, type_enum) \
-struct value value_as_ ## type_name(lisp_ ## type_name ## _t type_name) { \
-	return (struct value) { \
-		.type = type_enum, \
-		.as.type_name = type_name, \
-	}; \
-}
-define_value_init_of(num, LT_NUM)
-define_value_init_of(builtin, LT_BUILTIN)
-define_value_init_of(sym, LT_SYM)
-define_value_init_of(list, LT_LIST)
-define_value_init_of(boolean, LT_BOOLEAN)
-define_value_init_of(string, LT_STRING)
+#define X(type_name, _) \
+struct value value_of_ ## type_name(lisp_ ## type_name ## _t type_name);
+LIST_OF_LISP_TYPES
+#undef X
 
-// NUMBERS
-
-// required functions
-enum cmp_result i64_cmp(i64 lhs, i64 rhs) {
-	return lhs < rhs ? CMP_LT : lhs > rhs ? CMP_GT : CMP_EQ;
-}
-
-// BUILTINS
+// (CALL RESULT)
 
 struct call_res;
-typedef struct call_res (*builtin_function)(lisp_list_t args);
 
-struct builtin {
-	builtin_function fn;
-	// should arguments be evaluated before being passed to the function?
-	bool eval_args;
-	symbol_t name;
-	const char *doc; // TODO: switch to string_t?
-};
+// BULITINS
 
-// required functions
-enum cmp_result builtin_cmp(const builtin_t lhs, const builtin_t rhs) {
-	assert(false && "TODO");
-}
+// + misc +
 
 struct _builtin_call_opts {
 	bool inhibit_argument_evaluation;
@@ -287,26 +228,169 @@ struct call_res _builtin_call(
 
 // SYMBOLS
 
+// + init +
+
+symbol_t symbol_from_strn(const char *str, size_t n);
+symbol_t symbol_from_str(const char *str);
+
+// LISTS
+
+// + init +
+
+// ...
+
+// + misc +
+
+struct _list_call_opts {
+	bool is_tail_call;
+	bool inhibit_argument_evaluation;
+};
+struct call_res _list_call(
+	const struct list *this,
+	const lisp_list_t *args,
+	struct _list_call_opts opts
+);
+#define list_call(this, args, ...) _builtin_call( \
+	&(this), \
+	&(args), \
+	(struct _list_call_opts) { \
+		.is_tail_call = false, \
+		.inhibit_argument_evaluation = false, \
+		__VA_ARGS__ \
+	} \
+)
+
+// STRINGS
+
+// + init +
+
+string_t string_from_strn(const char *str, size_t len);
+string_t string_from_str(const char *str);
+string_t string_substr(string_t of, size_t begin, size_t end);
+
+/* SECTION: LISP TYPES AND VALUES (DEFINITION) */
+
+// LISP VALUES
+
+struct value {
+	enum lisp_type type;
+	union {
+#define X(type_name, _) lisp_ ## type_name ## _t type_name;
+		LIST_OF_LISP_TYPES
+#undef X
+	} as;
+};
+
+// + required functions +
+
+enum cmp_result value_cmp(const lisp_value_t lhs, const lisp_value_t rhs) {
+	assert(lhs.type == rhs.type);
+
+	switch (lhs.type) {
+#define X(type_name, enum_name) \
+		case enum_name: return type_name ## _cmp(lhs.as.type_name, rhs.as.type_name);
+		LIST_OF_LISP_TYPES
+#undef X
+	}
+
+	assert(false && "unreachable");
+}
+// NOTE: cannot implement gc_increfs_value or gc_decrefs_value here, done further down
+void value_destroy(struct value this) {
+	switch (this.type) {
+#define X(type_name, enum_name) \
+		case enum_name: type_name ## _destroy(this.as.type_name); break;
+		LIST_OF_GCD_TYPES
+#undef X
+		default: break;
+	}
+}
+struct value value_copy(struct value this) {
+	gc_increfs_value(this);
+	return this;
+}
+
+// + init +
+#define X(type_name, enum_name) \
+struct value value_of_ ## type_name(lisp_ ## type_name ## _t type_name) { \
+	return (struct value) { \
+		.type = enum_name, \
+		.as.type_name = type_name, \
+	}; \
+}
+LIST_OF_LISP_TYPES
+#undef X
+
+// NUMBERS
+
+// + required functions +
+
+enum cmp_result number_cmp(const lisp_number_t lhs, const lisp_number_t rhs) {
+	return lhs < rhs ? CMP_LT : lhs > rhs ? CMP_GT : CMP_EQ;
+}
+
+// (CALL RESULT)
+
+struct call_res {
+#error TODO
+};
+
+// BUILTINS
+
+typedef struct call_res (*builtin_function)(lisp_list_t args);
+
+struct builtin {
+	builtin_function fn;
+	// should arguments be evaluated before being passed to the function?
+	bool eval_args;
+	symbol_t name;
+	const char *doc; // TODO: switch to string_t?
+};
+
+// + required functions +
+
+enum cmp_result builtin_cmp(const lisp_builtin_t lhs, const lisp_builtin_t rhs) {
+	assert(false && "TODO");
+}
+
+// + misc +
+
+struct call_res _builtin_call(
+	const struct builtin *this,
+	const lisp_list_t *args,
+	struct _builtin_call_opts opts
+) {
+	assert(false && "TODO");
+}
+
+// SYMBOLS
+
 struct symbol {
 	const char *sym;
 
 	size_t refcount;
 };
 
-// required functions
-void symbol_destroy(symbol_t this) {
-	assert(this != NULL);
+// + required functions +
 
-	free((void*)this->sym);
-	free(this);
-}
 enum cmp_result symbol_cmp(const symbol_t lhs, const symbol_t rhs) {
 	if (lhs == rhs) return CMP_EQ;
 	const int cmpres = strcmp(lhs->sym, rhs->sym);
 	return cmpres < 0 ? CMP_LT : cmpres > 0 ? CMP_GT : CMP_EQ;
 }
+void symbol_destroy(lisp_symbol_t this) {
+	assert(this != NULL);
 
-// init
+	free((void*)this->sym);
+	free(this);
+}
+lisp_symbol_t symbol_copy(lisp_symbol_t this) {
+	gc_increfs(this);
+	return this;
+}
+
+// + init +
+
 symbol_t symbol_from_strn(const char *str, size_t n) {
 	assert(str != NULL);
 
@@ -330,41 +414,39 @@ struct list {
 	size_t refcount;
 };
 
-// required functions
-void list_destroy(list_t this) {
+// + required functions +
+
+enum cmp_result list_cmp(const list_t lhs, const list_t rhs) {
+	assert(false && "TODO");
+}
+void list_destroy(lisp_list_t this) {
 	gc_decrefs(this->next, list);
 	gc_decrefs_value(this->val);
 	free(this);
 }
-enum cmp_result list_cmp(const list_t lhs, const list_t rhs) {
-	assert(false && "TODO");
+lisp_list_t list_copy(lisp_list_t this) {
+	gc_increfs(this);
+	return this;
 }
 
-// init
+// + init +
+
 //...
 
-struct _list_call_opts {
-	bool is_tail_call;
-	bool inhibit_argument_evaluation;
-};
+// + misc +
+
 struct call_res _list_call(
 	const struct list *this,
 	const lisp_list_t *args,
 	struct _list_call_opts opts
-);
-#define list_call(this, args, ...) _builtin_call( \
-	&(this), \
-	&(args), \
-	(struct _list_call_opts) { \
-		.is_tail_call = false, \
-		.inhibit_argument_evaluation = false, \
-		__VA_ARGS__ \
-	} \
-)
+) {
+	assert(false && "TODO");
+}
 
 // BOOLEANS
 
-// required functions
+// + required functions +
+
 enum cmp_result bool_cmp(bool lhs, bool rhs) {
 	return lhs < rhs ? CMP_LT : lhs > rhs ? CMP_GT : CMP_EQ;
 }
@@ -379,17 +461,23 @@ struct string {
 	size_t refcount;
 };
 
-// required functions
-void string_destroy(string_t this) {
+// + required functions +
+
+enum cmp_result string_cmp(const string_t lhs, const string_t rhs) {
+	assert(false && "TODO");
+}
+void string_destroy(lisp_string_t this) {
 	if (this->borrows == NULL) free((void*)this->data);
 	else gc_decrefs(this->borrows, string);
 	free(this);
 }
-enum cmp_result string_cmp(const string_t lhs, const string_t rhs) {
-	assert(false && "TODO");
+lisp_string_t string_copy(lisp_string_t this) {
+	gc_increfs(this);
+	return this;
 }
 
-// init
+// + init +
+
 string_t string_from_strn(const char *str, size_t len) {
 	assert(str != NULL);
 
@@ -421,6 +509,29 @@ string_t string_substr(string_t of, size_t begin, size_t end) {
 	};
 	return res;
 }
+
+/* SECTION: LISP VALUE GC HELPERS */
+
+void gc_increfs_value(struct value this) {
+	switch (this.type) {
+#define X(type_name, enum_name) \
+		case enum_name: { gc_increfs(this.as.type_name); } break;
+		LIST_OF_GCD_TYPES
+#undef X
+		default: break;
+	}
+}
+void gc_decrefs_value(struct value this) {
+	switch (this.type) {
+#define X(type_name, enum_name) \
+		case enum_name: { gc_decrefs(this.as.type_name, type_name); } break;
+		LIST_OF_GCD_TYPES
+#undef X
+		default: break;
+	}
+}
+
+/* SECTION: REFACTOR PENDING */
 
 list_t list_copy(list_t list);
 struct lisp_val lisp_val_copy(struct lisp_val val) {
