@@ -126,22 +126,6 @@ enum lisp_type {
 #undef X
 };
 
-// GARBAGE COLLECTION
-
-#define gc_increfs(obj) do { \
-	assert((obj) != NULL); \
-	assert((obj)->refcount != 0); \
-	++(obj)->refcount; \
-} while (0)
-#define gc_decrefs(obj, type) do { \
-	assert((obj) != NULL); \
-	assert((obj)->refcount != 0); \
-	--(obj)->refcount; \
-	if ((obj)->refcount == 0) { \
-		type ## _destroy(obj); \
-	} \
-} while (0)
-
 // COMPARISON
 
 enum cmp_result {
@@ -181,15 +165,33 @@ enum cmp_result type_name ## _cmp(const lisp_ ## type_name ## _t lhs, const lisp
 LIST_OF_LISP_TYPES
 #undef X
 
-void gc_increfs_value(struct value this);
-void gc_decrefs_value(struct value this);
-void value_destroy(struct value this);
+void value_increfs(lisp_value_t this);
+void value_decrefs(lisp_value_t this);
+void value_destroy(lisp_value_t this);
 struct value value_copy(struct value this);
 #define X(type_name, _) \
+void type_name ## _increfs(lisp_ ## type_name ## _t this); \
+void type_name ## _decrefs(lisp_ ## type_name ## _t this); \
 void type_name ## _destroy(lisp_ ## type_name ## _t this); \
 lisp_ ## type_name ## _t type_name ## _copy(lisp_ ## type_name ## _t this);
 LIST_OF_GCD_TYPES
 #undef X
+
+#define def_trivial_increfs(type_name) \
+void type_name ## _increfs(lisp_ ## type_name ## _t this) { \
+	assert(this != NULL); \
+	assert(this->refcount != 0); \
+	++this->refcount; \
+}
+#define def_trivial_decrefs(type_name) \
+void type_name ## _decrefs(lisp_ ## type_name ## _t this) { \
+	assert(this != NULL); \
+	assert(this->refcount != 0); \
+	--this->refcount; \
+	if (this->refcount == 0) { \
+		type_name ## _destroy(this); \
+	} \
+}
 
 // LISP VALUES
 
@@ -237,7 +239,17 @@ symbol_t symbol_from_str(const char *str);
 
 // + init +
 
-// ...
+list_t list_cons(lisp_value_t head, list_t tail);
+// WARNING: doesn't increase refcount of tail!
+list_t list_cons_with(lisp_value_t head, list_t tail);
+
+// + manipulation +
+
+list_t list_dup(list_t this);
+// WARNING: all manipulation functions assume that this->info->net_refcount == 1
+// this is checked with an assertion!
+list_t list_append(list_t this, lisp_value_t val);
+list_t list_reverse(list_t this);
 
 // + misc +
 
@@ -295,8 +307,25 @@ enum cmp_result value_cmp(const lisp_value_t lhs, const lisp_value_t rhs) {
 
 	assert(false && "unreachable");
 }
-// NOTE: cannot implement gc_increfs_value or gc_decrefs_value here, done further down
-void value_destroy(struct value this) {
+void value_increfs(lisp_value_t this) {
+	switch (this.type) {
+#define X(type_name, enum_name) \
+		case enum_name: { type_name ## _increfs(this.as.type_name); } break;
+		LIST_OF_GCD_TYPES
+#undef X
+		default: break;
+	}
+}
+void value_decrefs(lisp_value_t this) {
+	switch (this.type) {
+#define X(type_name, enum_name) \
+		case enum_name: { type_name ## _decrefs(this.as.type_name); } break;
+		LIST_OF_GCD_TYPES
+#undef X
+		default: break;
+	}
+}
+void value_destroy(lisp_value_t this) {
 	switch (this.type) {
 #define X(type_name, enum_name) \
 		case enum_name: type_name ## _destroy(this.as.type_name); break;
@@ -304,10 +333,6 @@ void value_destroy(struct value this) {
 #undef X
 		default: break;
 	}
-}
-struct value value_copy(struct value this) {
-	gc_increfs_value(this);
-	return this;
 }
 
 // + init +
@@ -378,15 +403,13 @@ enum cmp_result symbol_cmp(const symbol_t lhs, const symbol_t rhs) {
 	const int cmpres = strcmp(lhs->sym, rhs->sym);
 	return cmpres < 0 ? CMP_LT : cmpres > 0 ? CMP_GT : CMP_EQ;
 }
+def_trivial_increfs(symbol)
+def_trivial_decrefs(symbol)
 void symbol_destroy(lisp_symbol_t this) {
 	assert(this != NULL);
 
 	free((void*)this->sym);
 	free(this);
-}
-lisp_symbol_t symbol_copy(lisp_symbol_t this) {
-	gc_increfs(this);
-	return this;
 }
 
 // + init +
@@ -407,10 +430,15 @@ symbol_t symbol_from_str(const char *str) {
 
 // LISTS
 
+struct list_info {
+	list_t last;
+	size_t net_refcount;
+};
 struct list {
 	struct value val;
 	list_t next;
 
+	struct list_info *info;
 	size_t refcount;
 };
 
@@ -419,19 +447,105 @@ struct list {
 enum cmp_result list_cmp(const list_t lhs, const list_t rhs) {
 	assert(false && "TODO");
 }
-void list_destroy(lisp_list_t this) {
-	gc_decrefs(this->next, list);
-	gc_decrefs_value(this->val);
-	free(this);
+void list_increfs(lisp_list_t this) {
+	assert(this != NULL);
+	assert(this->refcount != 0);
+	++this->refcount;
+	assert(this->info->net_refcount != 0);
+	++this->info->net_refcount;
 }
-lisp_list_t list_copy(lisp_list_t this) {
-	gc_increfs(this);
-	return this;
+void list_decrefs(lisp_list_t this) {
+	assert(this != NULL);
+	assert(this->refcount != 0);
+	--this->refcount;
+	assert(this->info->net_refcount != 0);
+	--this->info->net_refcount;
+	if (this->refcount == 0) {
+		list_destroy(this);
+	}
+}
+void list_destroy(lisp_list_t this) {
+	assert(this->info != NULL);
+
+	if (this->next) list_decrefs(this->next);
+	value_decrefs(this->val);
+	if (this == this->info->last) {
+		assert(this->info->net_refcount == 0);
+		free(this->info);
+	}
+	free(this);
 }
 
 // + init +
 
-//...
+list_t list_cons(lisp_value_t head, list_t tail) {
+	if (tail != NULL) list_copy(tail);
+	return list_cons_with(head, tail);
+}
+list_t list_cons_with(lisp_value_t head, list_t tail) {
+	list_t res = malloc(sizeof(*res));
+	if (tail == NULL) {
+		struct list_info *info = malloc(sizeof(*info));
+		*info = (struct list_info) {
+			.last = res,
+			.net_refcount = 1,
+		};
+		*res = (struct list) {
+			.val = value_copy(head),
+			.next = NULL,
+			.info = info,
+			.refcount = 1,
+		};
+	} else {
+		*res = (struct list) {
+			.val = value_copy(head),
+			.next = tail,
+			.info = tail->info,
+			.refcount = 1,
+		};
+	}
+	return res;
+}
+
+// + manipulation +
+
+list_t list_dup(list_t this) {
+	list_t res = NULL;
+
+	while (this != NULL) {
+		res = list_append(res, this->val);
+
+		this = this->next;
+	}
+
+	return res;
+}
+// WARNING: all manipulation functions assume that this->info->net_refcount == 1
+// this is checked with an assertion!
+list_t list_append(list_t this, lisp_value_t val) {
+	if (this == NULL) {
+		return list_cons(val, NULL);
+	}
+	assert(this->info->net_refcount == 0);
+
+	list_t new_last = malloc(sizeof(new_last));
+	*new_last = (struct list) {
+		.val = value_copy(val),
+		.next = NULL,
+		.info = this->info,
+		.refcount = 1,
+	};
+	this->info->last->next = new_last;
+	this->info->last = new_last;
+
+	return this;
+}
+list_t list_reverse(list_t this) {
+	if (this == NULL) return NULL;
+	assert(this->info->net_refcount == 0);
+
+	assert(false && "TODO");
+}
 
 // + misc +
 
@@ -466,14 +580,12 @@ struct string {
 enum cmp_result string_cmp(const string_t lhs, const string_t rhs) {
 	assert(false && "TODO");
 }
+def_trivial_increfs(string)
+def_trivial_decrefs(string)
 void string_destroy(lisp_string_t this) {
 	if (this->borrows == NULL) free((void*)this->data);
-	else gc_decrefs(this->borrows, string);
+	else string_decrefs(this->borrows);
 	free(this);
-}
-lisp_string_t string_copy(lisp_string_t this) {
-	gc_increfs(this);
-	return this;
 }
 
 // + init +
@@ -498,56 +610,34 @@ string_t string_substr(string_t of, size_t begin, size_t end) {
 	assert(begin <= end);
 	assert(end <= of->len);
 
-	gc_increfs(of);
-
 	string_t res = malloc(sizeof(*res));
 	*res = (struct string) {
 		.data = &of->data[begin],
 		.len = end - begin,
-		.borrows = of,
+		.borrows = string_copy(of),
 		.refcount = 1,
 	};
 	return res;
 }
 
-/* SECTION: LISP VALUE GC HELPERS */
+/* SECTION: GC HELPERS */
 
-void gc_increfs_value(struct value this) {
-	switch (this.type) {
-#define X(type_name, enum_name) \
-		case enum_name: { gc_increfs(this.as.type_name); } break;
-		LIST_OF_GCD_TYPES
-#undef X
-		default: break;
-	}
+
+lisp_value_t value_copy(lisp_value_t this) {
+	value_increfs(this);
+	return this;
 }
-void gc_decrefs_value(struct value this) {
-	switch (this.type) {
-#define X(type_name, enum_name) \
-		case enum_name: { gc_decrefs(this.as.type_name, type_name); } break;
-		LIST_OF_GCD_TYPES
-#undef X
-		default: break;
-	}
+#define X(type_name, _) \
+lisp_ ## type_name ## _t type_name ## _copy(lisp_ ## type_name ## _t this) { \
+	type_name ## _increfs(this); \
+	return this; \
 }
+LIST_OF_GCD_TYPES
+#undef X
 
 /* SECTION: REFACTOR PENDING */
 
-list_t list_copy(list_t list);
-struct lisp_val lisp_val_copy(struct lisp_val val) {
-	if (val.type == LT_SYM) sym_copy(val.as.sym);
-	else if (val.type == LT_LIST) list_copy(val.as.list);
-	else if (val.type == LT_STRING) string_copy(val.as.string);
-
-	return val;
-}
-void list_free(list_t list);
 void lisp_val_print(struct lisp_val this, FILE *f);
-void lisp_val_free(struct lisp_val val) {
-	if (val.type == LT_SYM) sym_free(val.as.sym);
-	else if (val.type == LT_LIST) list_free(val.as.list);
-	else if (val.type == LT_STRING) string_free(val.as.string);
-}
 
 struct call_res {
 	struct lisp_val val;
@@ -561,50 +651,6 @@ const struct lisp_val nil = {
 	.type = LT_LIST,
 	.as.list = NULL,
 };
-
-list_t list_cons(struct lisp_val head, list_t tail) {
-	list_t res = malloc(sizeof(*res));
-	*res = (struct list) {
-		.val = lisp_val_copy(head),
-		.next = list_copy(tail),
-		.refcount = 1,
-	};
-	return res;
-}
-list_t list_append(list_t this, struct lisp_val val) {
-	// WARNING: unsafe operation:
-	// modifies an existing list
-	// (values should be const)
-	list_t tail = malloc(sizeof(*tail));
-	*tail = (struct list) {
-		.val = lisp_val_copy(val),
-		.next = NULL,
-		.refcount = 1,
-	};
-
-	if (this == NULL) {
-		return tail;
-	}
-
-	list_t pre_tail = this;
-	while (pre_tail->next != NULL) {
-		pre_tail = pre_tail->next;
-	}
-	pre_tail->next = tail;
-
-	return this;
-}
-list_t list_dup(list_t this) {
-	list_t res = NULL;
-
-	while (this != NULL) {
-		res = list_append(res, this->val);
-
-		this = this->next;
-	}
-
-	return res;
-}
 
 void lisp_val_print(struct lisp_val this, FILE *f);
 const char escapes[][2] = {
