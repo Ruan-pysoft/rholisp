@@ -219,13 +219,13 @@ struct _builtin_call_opts {
 	bool inhibit_argument_evaluation;
 };
 struct call_res _builtin_call(
-	const struct builtin *this,
-	const lisp_list_t *args,
+	const builtin_t this,
+	const lisp_list_t args,
 	struct _builtin_call_opts opts
 );
 #define builtin_call(this, args, ...) _builtin_call( \
-	&(this), \
-	&(args), \
+	this, \
+	args, \
 	(struct _builtin_call_opts) { \
 		.inhibit_argument_evaluation = false, \
 		__VA_ARGS__ \
@@ -262,13 +262,13 @@ struct _list_call_opts {
 	bool inhibit_argument_evaluation;
 };
 struct call_res _list_call(
-	const struct list *this,
-	const lisp_list_t *args,
+	const list_t this,
+	const lisp_list_t args,
 	struct _list_call_opts opts
 );
-#define list_call(this, args, ...) _builtin_call( \
-	&(this), \
-	&(args), \
+#define list_call(this, args, ...) _list_call( \
+	this, \
+	args, \
 	(struct _list_call_opts) { \
 		.is_tail_call = false, \
 		.inhibit_argument_evaluation = false, \
@@ -458,7 +458,7 @@ bool builtin_is_truthy(const lisp_builtin_t this) {
 
 struct call_res _builtin_call(
 	const struct builtin *this,
-	const lisp_list_t *args,
+	const lisp_list_t args,
 	struct _builtin_call_opts opts
 ) {
 	assert(false && "TODO");
@@ -652,8 +652,8 @@ list_t list_reverse(list_t this) {
 // + misc +
 
 struct call_res _list_call(
-	const struct list *this,
-	const lisp_list_t *args,
+	const list_t this,
+	const lisp_list_t args,
 	struct _list_call_opts opts
 ) {
 	assert(false && "TODO");
@@ -857,6 +857,26 @@ void env_free(struct env *env) {
 	free(env);
 }
 
+/* SECTION: CONSTANTS */
+
+#define LIST_OF_PREDEFINED_SYMBOLS \
+	X(quote,   "quote") \
+	X(nil,     "nil") \
+	X(number,  "number") \
+	X(builtin, "builtin") \
+	X(symbol,  "symbol") \
+	X(list,    "list") \
+	X(boolean, "boolean") \
+	X(string,  "string") \
+	X(file,    "file") \
+	X(clib,    "clib") \
+	X(csym,    "csym") \
+	X(pointer, "pointer")
+
+#define X(name, _) static lisp_value_t name ## _symbol;
+LIST_OF_PREDEFINED_SYMBOLS
+#undef X
+
 /* SECTION: REFACTOR PENDING */
 
 #define advance() do { ++*str; --*str_len; } while (0)
@@ -878,25 +898,14 @@ bool is_break(char c) {
 	return c == ' ' || c == '(' || c == ')' || c == '\t' || c == '\n' || c == ';' || c == '"';
 }
 
-struct lisp_val quote(struct lisp_val val) {
-	static struct lisp_val quote_sym = {
-		.type = LT_SYM,
-		.as.sym = NULL,
-	};
-	if (quote_sym.as.sym == NULL) {
-		quote_sym.as.sym = sym_from_str("quote");
-	}
-
+lisp_value_t quote(lisp_value_t value) {
 	list_t lst = NULL;
-	lst = list_append(lst, quote_sym);
-	lst = list_append(lst, val);
-	return (struct lisp_val) {
-		.type = LT_LIST,
-		.as.list = lst,
-	};
+	lst = list_append(lst, quote_symbol);
+	lst = list_append(lst, value);
+	return value_of_list(lst);
 }
 
-struct lisp_val lisp_val_parse(const char **str, size_t *str_len);
+lisp_value_t lisp_val_parse(const char **str, size_t *str_len);
 list_t list_parse(const char **str, size_t *str_len) {
 	list_t res = NULL;
 
@@ -911,9 +920,9 @@ list_t list_parse(const char **str, size_t *str_len) {
 			return res;
 		}
 
-		struct lisp_val tmp = lisp_val_parse(str, str_len);
+		lisp_value_t tmp = lisp_val_parse(str, str_len);
 		res = list_append(res, tmp);
-		lisp_val_free(tmp);
+		value_decrefs(tmp);
 	}
 }
 
@@ -929,14 +938,14 @@ i64 num_parse(const char **str, size_t *str_len) {
 	return res;
 }
 
-sym_t sym_parse(const char **str, size_t *str_len) {
+symbol_t sym_parse(const char **str, size_t *str_len) {
 	const char *begin = *str;
 
 	while (*str_len && !is_break(**str)) {
 		advance();
 	}
 
-	return sym_from_strn(begin, (*str)-begin);
+	return symbol_from_strn(begin, (*str)-begin);
 }
 
 string_t string_parse(const char **str, size_t *str_len) {
@@ -1019,7 +1028,7 @@ i64 char_parse(const char **str, size_t *str_len) {
 	return c;
 }
 
-struct lisp_val lisp_val_parse(const char **str, size_t *str_len) {
+lisp_value_t lisp_val_parse(const char **str, size_t *str_len) {
 	skip_ws(str, str_len);
 	if (*str_len == 0) {
 		fprintf(stderr, "expected value, got EOF\n");
@@ -1027,48 +1036,29 @@ struct lisp_val lisp_val_parse(const char **str, size_t *str_len) {
 	}
 	if (**str == '(') {
 		advance();
-		return (struct lisp_val) {
-			.type = LT_LIST,
-			.as.list = list_parse(str, str_len),
-		};
+		return value_of_list(list_parse(str, str_len));
 	} else if (**str == '"') {
-		return (struct lisp_val) {
-			.type = LT_STRING,
-			.as.string = string_parse(str, str_len),
-		};
+		return value_of_string(string_parse(str, str_len));
 	} else if ('0' <= **str && **str <= '9') {
-		return (struct lisp_val) {
-			.type = LT_NUM,
-			.as.num = num_parse(str, str_len),
-		};
+		return value_of_number(num_parse(str, str_len));
 	} else if ((**str == 'T' || **str == 'F') && (*str_len == 1 || is_break(*((*str)+1)))) {
 		const char c = **str;
 		advance();
-		return (struct lisp_val) {
-			.type = LT_BOOL,
-			.as.boo = c == 'T',
-		};
+		return value_of_boolean(c == 'T');
 	} else if (**str == '\'' && (*str_len == 1 || is_break(*((*str)+1)))) {
 		advance();
-		struct lisp_val tmp = lisp_val_parse(str, str_len);
-		struct lisp_val res = quote(tmp);
-		lisp_val_free(tmp);
+		lisp_value_t tmp = lisp_val_parse(str, str_len);
+		lisp_value_t res = quote(tmp);
+		value_decrefs(tmp);
 		return res;
 	} else if (**str == '#' && (*str_len == 1 || is_break(*((*str)+1)))) {
 		advance();
-		return (struct lisp_val) {
-			.type = LT_NUM,
-			.as.num = char_parse(str, str_len),
-		};
+		return value_of_number(char_parse(str, str_len));
 	} else {
-		return (struct lisp_val) {
-			.type = LT_SYM,
-			.as.sym = sym_parse(str, str_len),
-		};
+		return value_of_symbol(sym_parse(str, str_len));
 	}
 }
 
-struct sym _nil_sym = { .sym = "nil", .refcount = 1 };
 struct env root_env = {0};
 struct env *curr_env = &root_env;
 
@@ -1078,48 +1068,36 @@ struct call_res ladd(list_t args) {
 	i64 res = 0;
 
 	while (args != NULL) {
-		assert(args->val.type == LT_NUM);
-		res += args->val.as.num;
+		assert(args->val.type == LT_NUMBER);
+		res += args->val.as.number;
 
 		args = args->next;
 	}
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = res,
-	}));
+	return call_res_from(value_of_number(res));
 }
 struct call_res lsub(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_NUM);
+	assert(args->val.type == LT_NUMBER);
 
 	if (args->next == NULL) {
-		lret(((struct lisp_val) {
-			.type = LT_NUM,
-			.as.num = -args->val.as.num,
-		}));
+		return call_res_from(value_of_number(-args->val.as.number));
 	}
 
-	i64 res = args->val.as.num;
+	i64 res = args->val.as.number;
 	args = args->next;
 
 	while (args != NULL) {
-		assert(args->val.type == LT_NUM);
-		res -= args->val.as.num;
+		assert(args->val.type == LT_NUMBER);
+		res -= args->val.as.number;
 
 		args = args->next;
 	}
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = res,
-	}));
+	return call_res_from(value_of_number(res));
 }
 struct call_res llist_fn(list_t args) {
-	lret(((struct lisp_val) {
-		.type = LT_LIST,
-		.as.list = list_copy(args),
-	}));
+	return call_res_from(value_of_list(list_copy(args)));
 }
 struct call_res lcons(list_t args) {
 	assert(args != NULL);
@@ -1127,10 +1105,7 @@ struct call_res lcons(list_t args) {
 	assert(args->next->next == NULL);
 	assert(args->next->val.type == LT_LIST);
 
-	lret(((struct lisp_val) {
-		.type = LT_LIST,
-		.as.list = list_cons(args->val, args->next->val.as.list),
-	}));
+	return call_res_from(value_of_list(list_cons(args->val, args->next->val.as.list)));
 }
 struct call_res lappend(list_t args) {
 	assert(args != NULL);
@@ -1138,27 +1113,27 @@ struct call_res lappend(list_t args) {
 	assert(args->val.type == LT_LIST);
 	assert(args->next->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_LIST,
-		.as.list = list_append(list_dup(args->val.as.list), args->next->val),
-	}));
+	return call_res_from(value_of_list(list_append(
+		list_dup(args->val.as.list),
+		args->next->val
+	)));
 }
 struct call_res lquote(list_t args) {
 	assert(args != NULL);
 	assert(args->next == NULL);
 
-	lret(lisp_val_copy(args->val));
+	return call_res_from(value_copy(args->val));
 }
-struct lisp_val eval(struct lisp_val val);
+lisp_value_t eval(lisp_value_t val);
 struct call_res leval(list_t args) {
 	assert(args != NULL);
 	assert(args->next == NULL);
 
-	lret(lisp_val_copy(args->val), .eval = true);
+	return call_res_from(value_copy(args->val), .eval = true);
 }
 struct call_res ldef(list_t args) {
 	while (args != NULL) {
-		assert(args->val.type == LT_SYM);
+		assert(args->val.type == LT_SYMBOL);
 		assert(args->next != NULL);
 
 		struct env *env = curr_env;
@@ -1166,14 +1141,14 @@ struct call_res ldef(list_t args) {
 			assert(env->parent != NULL);
 			env = env->parent;
 		}
-		struct lisp_val tmp = eval(args->next->val);
-		env_def(env, args->val.as.sym, tmp);
-		lisp_val_free(tmp);
+		lisp_value_t tmp = eval(args->next->val);
+		env_def(env, args->val.as.symbol, tmp);
+		value_decrefs(tmp);
 
 		args = args->next->next;
 	}
 
-	lret(lisp_val_copy(nil));
+	return call_res_from(nil);
 }
 struct call_res lassoc(list_t args) {
 	assert(args != NULL);
@@ -1189,17 +1164,17 @@ struct call_res lassoc(list_t args) {
 
 	list_t vars = args->val.as.list;
 	while (vars != NULL) {
-		assert(vars->val.type == LT_SYM);
+		assert(vars->val.type == LT_SYMBOL);
 		assert(vars->next != NULL);
 
-		struct lisp_val tmp = eval(vars->next->val);
-		env_def(curr_env, vars->val.as.sym, tmp);
-		lisp_val_free(tmp);
+		lisp_value_t tmp = eval(vars->next->val);
+		env_def(curr_env, vars->val.as.symbol, tmp);
+		value_decrefs(tmp);
 
 		vars = vars->next->next;
 	}
 
-	lret(lisp_val_copy(args->next->val), .eval = true, .destroy_env = true);
+	return call_res_from(value_copy(args->next->val), .eval = true, .destroy_env = true);
 }
 struct call_res lenv_new(list_t args) {
 	assert(args != NULL);
@@ -1210,81 +1185,78 @@ struct call_res lenv_new(list_t args) {
 	env->parent = curr_env;
 	curr_env = env;
 
-	lret(lisp_val_copy(args->val), .eval = true, .destroy_env = true);
+	return call_res_from(value_copy(args->val), .eval = true, .destroy_env = true);
 }
 struct call_res lset(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_SYM);
+	assert(args->val.type == LT_SYMBOL);
 	assert(args->next != NULL);
 	assert(args->next->next == NULL);
 
-	struct assoc *assoc = find_var(curr_env, args->val.as.sym);
+	struct assoc *assoc = find_var(curr_env, args->val.as.symbol);
 	assert(assoc != NULL);
 
 	// freeing assoc->val immediately caused me *so* much pain when I tried to set a string to its own substring...
-	struct lisp_val tmp = assoc->value;
+	lisp_value_t tmp = assoc->value;
 	assoc->value = eval(args->next->val);
-	lisp_val_free(tmp);
+	value_decrefs(tmp);
 
-	lret(lisp_val_copy(assoc->value));
+	return call_res_from(value_copy(assoc->value));
 }
 struct call_res ltruthy(list_t args) {
 	assert(args != NULL);
 	assert(args->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_BOOL,
-		.as.boo = lisp_val_is_truthy(args->val),
-	}));
+	return call_res_from(value_of_boolean(value_is_truthy(args->val)));
 }
 struct call_res lif(list_t args) {
 	assert(args != NULL);
 	assert(args->next != NULL);
 	assert(args->next->next == NULL || args->next->next->next == NULL);
 
-	struct lisp_val tmp = eval(args->val);
-	bool cond = lisp_val_is_truthy(tmp);
-	lisp_val_free(tmp);
+	lisp_value_t tmp = eval(args->val);
+	bool cond = value_is_truthy(tmp);
+	value_decrefs(tmp);
 
 	if (cond) {
-		lret(lisp_val_copy(args->next->val), .eval = true);
+		return call_res_from(value_copy(args->next->val), .eval = true);
 	} else if (args->next->next != NULL) {
-		lret(lisp_val_copy(args->next->next->val), .eval = true);
+		return call_res_from(value_copy(args->next->next->val), .eval = true);
 	} else {
-		lret(lisp_val_copy(nil));
+		return call_res_from(nil);
 	}
 }
 struct call_res ldo(list_t args) {
-	if (args == NULL) lret(lisp_val_copy(nil));
+	if (args == NULL) return call_res_from(nil);
 
 	while (args->next != NULL) {
-		lisp_val_free(eval(args->val));
+		value_decrefs(eval(args->val));
 		args = args->next;
 	}
 
-	lret(lisp_val_copy(args->val), .eval = true);
+	return call_res_from(value_copy(args->val), .eval = true);
 }
 
 struct list_fn {
 	list_t params;
 	bool is_macro;
-	sym_t name;
+	symbol_t name;
 	string_t doc;
-	struct lisp_val body;
+	lisp_value_t body;
 };
 struct list_fn list_fn_copy(struct list_fn this) {
 	list_copy(this.params);
-	if (this.name != NULL) sym_copy(this.name);
-	if (this.doc != NULL) string_copy(this.doc);
-	lisp_val_copy(this.body);
+	if (this.name != NULL) symbol_increfs(this.name);
+	if (this.doc != NULL) string_increfs(this.doc);
+	value_increfs(this.body);
 
 	return this;
 }
 void list_fn_free(struct list_fn this) {
-	list_free(this.params);
-	if (this.name != NULL) sym_free(this.name);
-	if (this.doc != NULL) string_free(this.doc);
-	lisp_val_free(this.body);
+	list_decrefs(this.params);
+	if (this.name != NULL) symbol_decrefs(this.name);
+	if (this.doc != NULL) string_decrefs(this.doc);
+	value_decrefs(this.body);
 }
 bool list_is_fn(list_t list) {
 	if (list == NULL) return false;
@@ -1292,14 +1264,14 @@ bool list_is_fn(list_t list) {
 
 	list_t params = list->val.as.list;
 	while (params != NULL) {
-		if (params->val.type == LT_SYM) {
+		if (params->val.type == LT_SYMBOL) {
 			params = params->next;
 			continue;
 		}
 
 		if (params->val.type != LT_LIST) return false;
 		if (params->next == NULL) return false;
-		if (params->next->val.type != LT_SYM) return false;
+		if (params->next->val.type != LT_SYMBOL) return false;
 		if (params->next->next != NULL) return false;
 		break;
 	}
@@ -1307,20 +1279,20 @@ bool list_is_fn(list_t list) {
 	if (list->next == NULL) return false;
 	if (list->next->val.type == LT_LIST) {
 		if (list->next->next == NULL) return false;
-		if (list->next->next->val.type != LT_BOOL) return false;
+		if (list->next->next->val.type != LT_BOOLEAN) return false;
 		if (list->next->next->next == NULL) return false;
 		if (list->next->next->next->next != NULL) return false;
 
 		list_t meta = list->next->val.as.list;
 
 		if (meta == NULL) return false;
-		if (meta->val.type != LT_SYM) return false;
+		if (meta->val.type != LT_SYMBOL) return false;
 		if (meta->next == NULL) return false;
 		if (meta->next->val.type != LT_STRING) return false;
 		if (meta->next->next != NULL) return false;
 
 		return true;
-	} else if (list->next->val.type == LT_BOOL) {
+	} else if (list->next->val.type == LT_BOOLEAN) {
 		if (list->next->next == NULL) return false;
 		if (list->next->next->next != NULL) return false;
 		return true;
@@ -1335,16 +1307,16 @@ struct list_fn list_to_fn(list_t list) {
 
 	if (list->next->val.type == LT_LIST) res = (struct list_fn) {
 		.params = list_copy(list->val.as.list),
-		.name = sym_copy(list->next->val.as.list->val.as.sym),
+		.name = symbol_copy(list->next->val.as.list->val.as.symbol),
 		.doc = string_copy(list->next->val.as.list->next->val.as.string),
-		.is_macro = list->next->next->val.as.boo,
-		.body = lisp_val_copy(list->next->next->next->val),
+		.is_macro = list->next->next->val.as.boolean,
+		.body = value_copy(list->next->next->next->val),
 	}; else res = (struct list_fn) {
 		.params = list_copy(list->val.as.list),
 		.name = NULL,
 		.doc = NULL,
-		.is_macro = list->next->val.as.boo,
-		.body = lisp_val_copy(list->next->next->val),
+		.is_macro = list->next->val.as.boolean,
+		.body = value_copy(list->next->next->val),
 	};
 
 	return res;
@@ -1358,25 +1330,34 @@ struct call_res lcall(list_t args) {
 	assert(args->next->next == NULL);
 
 	if (args->val.type == LT_BUILTIN) {
-		return lb_call(args->val.as.builtin, args->next->val.as.list, true);
+		return builtin_call(
+			args->val.as.builtin,
+			args->next->val.as.list,
+			.inhibit_argument_evaluation = true,
+		);
 	} else {
-		return ll_call(args->val.as.list, args->next->val.as.list, false, true);
+		return list_call(
+			args->val.as.list,
+			args->next->val.as.list,
+			.inhibit_argument_evaluation = true,
+			.is_tail_call = false,
+		);
 	}
 }
 struct call_res lpstr(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_STRING || args->val.type == LT_NUM);
+	assert(args->val.type == LT_STRING || args->val.type == LT_NUMBER);
 	assert(args->next == NULL);
 
 	if (args->val.type == LT_STRING) {
 		printf("%.*s", (int)args->val.as.string->len, args->val.as.string->data);
 	} else {
-		assert(0 <= args->val.as.num && args->val.as.num < 256);
+		assert(0 <= args->val.as.number && args->val.as.number < 256);
 
-		putchar(args->val.as.num);
+		putchar(args->val.as.number);
 	}
 
-	lret(nil);
+	return call_res_from(nil);
 }
 struct call_res lhead(list_t args) {
 	assert(args != NULL);
@@ -1384,7 +1365,7 @@ struct call_res lhead(list_t args) {
 	assert(args->next == NULL);
 
 	assert(args->val.as.list != NULL);
-	lret(lisp_val_copy(args->val.as.list->val));
+	return call_res_from(value_copy(args->val.as.list->val));
 }
 struct call_res ltail(list_t args) {
 	assert(args != NULL);
@@ -1392,33 +1373,30 @@ struct call_res ltail(list_t args) {
 	assert(args->next == NULL);
 
 	assert(args->val.as.list != NULL);
-	lret(((struct lisp_val) {
-		.type = LT_LIST,
-		.as.list = list_copy(args->val.as.list->next),
-	}));
+	return call_res_from(value_of_list(list_copy(args->val.as.list->next)));
 }
 struct call_res lnth(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_LIST);
 	assert(args->next != NULL);
-	assert(args->next->val.type == LT_NUM);
+	assert(args->next->val.type == LT_NUMBER);
 	assert(args->next->next == NULL);
 
 	list_t lst = args->val.as.list;
-	for (i64 i = 0; i < args->next->val.as.num; ++i) {
+	for (i64 i = 0; i < args->next->val.as.number; ++i) {
 		assert(lst != NULL);
 		lst = lst->next;
 	}
 
 	assert(lst != NULL);
-	lret(lisp_val_copy(lst->val));
+	return call_res_from(value_copy(lst->val));
 }
-struct lisp_val substitute(struct lisp_val into, struct env *from);
+lisp_value_t substitute(lisp_value_t into, struct env *from);
 struct call_res lsubs(list_t args) {
 	assert(args != NULL);
 	assert(args->next == NULL);
 
-	lret(substitute(args->val, curr_env));
+	return call_res_from(substitute(args->val, curr_env));
 }
 struct call_res lsubs_with(list_t args) {
 	assert(args != NULL);
@@ -1431,186 +1409,120 @@ struct call_res lsubs_with(list_t args) {
 	list_t subs = args->val.as.list;
 
 	while (subs != NULL) {
-		assert(subs->val.type == LT_SYM);
+		assert(subs->val.type == LT_SYMBOL);
 		assert(subs->next != NULL);
 
-		struct lisp_val tmp = eval(subs->next->val);
-		env_def(&env, subs->val.as.sym, tmp);
-		lisp_val_free(tmp);
+		lisp_value_t tmp = eval(subs->next->val);
+		env_def(&env, subs->val.as.symbol, tmp);
+		value_decrefs(tmp);
 
 		subs = subs->next->next;
 	}
 
-	struct lisp_val tmp = eval(args->next->val);
-	struct lisp_val res = substitute(tmp, &env);
-	lisp_val_free(tmp);
+	lisp_value_t tmp = eval(args->next->val);
+	lisp_value_t res = substitute(tmp, &env);
+	value_decrefs(tmp);
 
 	env_clear(&env);
 
-	lret(res);
+	return call_res_from(res);
 }
 
 struct call_res l_div(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_NUM);
+	assert(args->val.type == LT_NUMBER);
 	assert(args->next != NULL);
 
-	i64 res = args->val.as.num;
+	i64 res = args->val.as.number;
 	args = args->next;
 
 	while (args != NULL) {
-		assert(args->val.type == LT_NUM);
-		res /= args->val.as.num;
+		assert(args->val.type == LT_NUMBER);
+		res /= args->val.as.number;
 
 		args = args->next;
 	}
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = res,
-	}));
+	return call_res_from(value_of_number(res));
 }
 
 struct call_res lmod(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_NUM);
+	assert(args->val.type == LT_NUMBER);
 	assert(args->next != NULL);
-	assert(args->next->val.type == LT_NUM);
+	assert(args->next->val.type == LT_NUMBER);
 	assert(args->next->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = args->val.as.num % args->next->val.as.num,
-	}));
+	return call_res_from(value_of_number(args->val.as.number % args->next->val.as.number));
 }
 
 i64 sign(i64 n) {
 	return n < 0 ? -1 : n == 0 ? 0 : 1;
-}
-i64 lisp_val_cmp(struct lisp_val a, struct lisp_val b) {
-	assert(a.type == b.type);
-
-	switch (a.type) {
-		case LT_NUM: return a.as.num < b.as.num ? -1 : a.as.num == b.as.num ? 0 : 1;
-		case LT_SYM: return sign(strcmp(a.as.sym->sym, b.as.sym->sym));
-		case LT_BOOL: return a.as.boo < b.as.boo ? -1 : a.as.boo == b.as.boo ? 0 : 1;
-		case LT_BUILTIN: assert(false && "TODO");
-		case LT_LIST: {
-			list_t la = a.as.list;
-			list_t lb = b.as.list;
-
-			while (la != NULL && lb != NULL) {
-				const i64 cmp = lisp_val_cmp(la->val, lb->val);
-				if (cmp) return cmp;
-
-				la = la->next;
-				lb = lb->next;
-			}
-
-			return la == NULL && lb == NULL ? 0 : la == NULL ? -1 : 1;
-		}
-		case LT_STRING: {
-			string_t sa = a.as.string;
-			string_t sb = b.as.string;
-
-			if (sa == sb) return 0;
-
-			const size_t upto = sa->len < sb->len ? sa->len : sb->len;
-			for (size_t i = 0; i < upto; ++i) {
-				if (sa->data[i] < sb->data[i]) return -1;
-				else if (sa->data[i] > sb->data[i]) return 1;
-			}
-			return sa->len == sb->len ? 0 : sa->len < sb->len ? -1 : 1;
-		}
-	}
-
-	assert(false && "unreachable");
 }
 struct call_res lcmp(list_t args) {
 	assert(args != NULL);
 	assert(args->next != NULL);
 	assert(args->next->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = lisp_val_cmp(args->val, args->next->val),
-	}));
+	return call_res_from(value_of_number(value_cmp(args->val, args->next->val)));
 }
 
 struct call_res llsh(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_NUM);
+	assert(args->val.type == LT_NUMBER);
 	assert(args->next != NULL);
-	assert(args->next->val.type == LT_NUM);
+	assert(args->next->val.type == LT_NUMBER);
 	assert(args->next->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = args->val.as.num << args->next->val.as.num,
-	}));
+	return call_res_from(value_of_number(args->val.as.number << args->next->val.as.number));
 }
 
 struct call_res lrsh(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_NUM);
+	assert(args->val.type == LT_NUMBER);
 	assert(args->next != NULL);
-	assert(args->next->val.type == LT_NUM);
+	assert(args->next->val.type == LT_NUMBER);
 	assert(args->next->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = args->val.as.num >> args->next->val.as.num,
-	}));
+	return call_res_from(value_of_number(args->val.as.number >> args->next->val.as.number));
 }
 
 struct call_res lbnot(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_NUM);
+	assert(args->val.type == LT_NUMBER);
 	assert(args->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = ~args->val.as.num,
-	}));
+	return call_res_from(value_of_number(~args->val.as.number));
 }
 
 struct call_res lband(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_NUM);
+	assert(args->val.type == LT_NUMBER);
 	assert(args->next != NULL);
-	assert(args->next->val.type == LT_NUM);
+	assert(args->next->val.type == LT_NUMBER);
 	assert(args->next->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = args->val.as.num & args->next->val.as.num,
-	}));
+	return call_res_from(value_of_number(args->val.as.number & args->next->val.as.number));
 }
 
 struct call_res lbor(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_NUM);
+	assert(args->val.type == LT_NUMBER);
 	assert(args->next != NULL);
-	assert(args->next->val.type == LT_NUM);
+	assert(args->next->val.type == LT_NUMBER);
 	assert(args->next->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = args->val.as.num | args->next->val.as.num,
-	}));
+	return call_res_from(value_of_number(args->val.as.number | args->next->val.as.number));
 }
 
 struct call_res lbxor(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_NUM);
+	assert(args->val.type == LT_NUMBER);
 	assert(args->next != NULL);
-	assert(args->next->val.type == LT_NUM);
+	assert(args->next->val.type == LT_NUMBER);
 	assert(args->next->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = args->val.as.num ^ args->next->val.as.num,
-	}));
+	return call_res_from(value_of_number(args->val.as.number ^ args->next->val.as.number));
 }
 
 struct call_res land(list_t args) {
@@ -1618,13 +1530,13 @@ struct call_res land(list_t args) {
 	assert(args->next != NULL);
 
 	while (args->next != NULL) {
-		struct lisp_val res = eval(args->val);
-		if (!lisp_val_is_truthy(res)) lret(res);
-		lisp_val_free(res);
+		lisp_value_t res = eval(args->val);
+		if (!value_is_truthy(res)) return call_res_from(res);
+		value_decrefs(res);
 		args = args->next;
 	}
 
-	lret(lisp_val_copy(args->val), .eval = true);
+	return call_res_from(value_copy(args->val), .eval = true);
 }
 
 struct call_res lor(list_t args) {
@@ -1632,39 +1544,24 @@ struct call_res lor(list_t args) {
 	assert(args->next != NULL);
 
 	while (args->next != NULL) {
-		struct lisp_val res = eval(args->val);
-		if (lisp_val_is_truthy(res)) lret(res);
-		lisp_val_free(res);
+		lisp_value_t res = eval(args->val);
+		if (value_is_truthy(res)) return call_res_from(res);
+		value_decrefs(res);
 		args = args->next;
 	}
 
-	lret(lisp_val_copy(args->val), .eval = true);
+	return call_res_from(value_copy(args->val), .eval = true);
 }
 
 struct call_res ltype(list_t args) {
 	assert(args != NULL);
 	assert(args->next == NULL);
 
-#define symbol_of(name) \
-		static struct lisp_val name##_sym = { .type = LT_SYM, .as.sym = NULL, }; \
-		if (name##_sym.as.sym == NULL) name##_sym.as.sym = sym_from_str(#name)
-
-	symbol_of(number);
-	symbol_of(symbol);
-	symbol_of(builtin);
-	symbol_of(list);
-	symbol_of(boolean);
-	symbol_of(string);
-
-#undef symbol_of
-
 	switch (args->val.type) {
-		case LT_NUM: lret(lisp_val_copy(number_sym));
-		case LT_SYM: lret(lisp_val_copy(symbol_sym));
-		case LT_BUILTIN: lret(lisp_val_copy(builtin_sym));
-		case LT_LIST: lret(lisp_val_copy(list_sym));
-		case LT_BOOL: lret(lisp_val_copy(boolean_sym));
-		case LT_STRING: lret(lisp_val_copy(string_sym));
+#define X(type_name, enum_name) \
+		case enum_name: return call_res_from(value_copy(type_name ## _symbol));
+		LIST_OF_LISP_TYPES
+#undef X
 	}
 
 	assert(false && "unreachable");
@@ -1674,12 +1571,12 @@ struct call_res lexit(list_t args) {
 	assert(args == NULL || args->next == NULL);
 
 	if (args != NULL) {
-		assert(args->val.type == LT_NUM);
+		assert(args->val.type == LT_NUMBER);
 
 		// you can get valgrind to shut up about that 56 bytes of leaked memory when you call exit by uncommenting the following line:
 		//list_free(args);
 		// however, that breaks the gc model I have (it's not lexit's responsibility to free its args), also I don't know why valgrind thinks it's lost, since it's still somewhere in the callstack
-		exit(args->val.as.num);
+		exit(args->val.as.number);
 	} else exit(0);
 }
 struct call_res ljoin_s(list_t args) {
@@ -1687,8 +1584,8 @@ struct call_res ljoin_s(list_t args) {
 
 	size_t strlen = 0;
 	for (list_t args_it = args; args_it != NULL; args_it = args_it->next) {
-		assert(args_it->val.type == LT_STRING || args_it->val.type == LT_NUM);
-		assert(args_it->val.type != LT_NUM || (0 <= args_it->val.as.num && args_it->val.as.num < 256));
+		assert(args_it->val.type == LT_STRING || args_it->val.type == LT_NUMBER);
+		assert(args_it->val.type != LT_NUMBER || (0 <= args_it->val.as.number && args_it->val.as.number < 256));
 
 		if (args_it->val.type == LT_STRING) {
 			strlen += args_it->val.as.string->len;
@@ -1709,33 +1606,27 @@ struct call_res ljoin_s(list_t args) {
 			memcpy(&res->data[res->len], args->val.as.string->data, args->val.as.string->len);
 			res->len += args->val.as.string->len;
 		} else {
-			res->data[res->len++] = args->val.as.num;
+			res->data[res->len++] = args->val.as.number;
 		}
 
 		args = args->next;
 	}
 	assert(res->len == strlen);
 
-	lret(((struct lisp_val) {
-		.type = LT_STRING,
-		.as.string = res,
-	}));
+	return call_res_from(value_of_string(res));
 }
 struct call_res lsubstr_s(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_STRING);
 	assert(args->next != NULL);
-	assert(args->next->val.type == LT_NUM);
-	assert(args->next->next == NULL || args->next->next->val.type == LT_NUM);
+	assert(args->next->val.type == LT_NUMBER);
+	assert(args->next->next == NULL || args->next->next->val.type == LT_NUMBER);
 	assert(args->next->next == NULL || args->next->next->next == NULL);
 
 	if (args->next->next == NULL) {
-		assert(0 <= args->next->val.as.num && args->next->val.as.num < (i64)args->val.as.string->len);
+		assert(0 <= args->next->val.as.number && args->next->val.as.number < (i64)args->val.as.string->len);
 
-		lret(((struct lisp_val) {
-			.type = LT_NUM,
-			.as.num = args->val.as.string->data[args->next->val.as.num],
-		}));
+		return call_res_from(value_of_number(args->val.as.string->data[args->next->val.as.number]));
 	} else {
 		string_t s = args->val.as.string;
 		const i64 begin = args->next->val.as.num;
@@ -1745,58 +1636,42 @@ struct call_res lsubstr_s(list_t args) {
 		assert(0 <= begin);
 		assert(end <= (i64)s->len);
 
-		lret(((struct lisp_val) {
-			.type = LT_STRING,
-			.as.string = string_substr(s, begin, end),
-		}));
+		return call_res_from(value_of_string(string_substr(s, begin, end)));
 	}
 }
 struct call_res lrefs(list_t args) {
 	assert(args != NULL);
 	assert(args->next == NULL);
 
-	struct lisp_val res = {
-		.type = LT_NUM,
-		.as.num = 0,
-	};
+	lisp_value_t res = value_of_number(0);
 
-	if (args->val.type == LT_SYM)  {
-		res.as.num = args->val.as.sym->refcount;
-		lret(res);
-	} else if (args->val.type == LT_LIST && args->val.as.list != NULL) {
-		res.as.num = args->val.as.list->refcount;
-		lret(res);
-	} else if (args->val.type == LT_STRING) {
-		res.as.num = args->val.as.string->refcount;
-		lret(res);
+	switch (args->val.type) {
+#define X(type_name, enum_type) \
+		case enum_type: { \
+			return call_res_from(value_of_number(args->val.as.type_name->refcount)); \
+		} break;
+		LIST_OF_GCD_TYPES
+#undef X
+		default: return call_res_from(nil);
 	}
 
-	lret(nil);
+	assert(false && "unreachable");
 }
 struct call_res lid(list_t args) {
 	assert(args != NULL);
 	assert(args->next == NULL);
 
-	struct lisp_val res = {
-		.type = LT_NUM,
-		.as.num = 0,
-	};
-
-	if (args->val.type == LT_SYM)  {
-		res.as.num = *(i64*)&args->val.as.sym;
-		lret(res);
+	if (args->val.type == LT_SYMBOL)  {
+		return call_res_from(value_of_number(*(i64*)&args->val.as.symbol));
 	} else if (args->val.type == LT_LIST) {
-		res.as.num = *(i64*)&args->val.as.list;
-		lret(res);
+		return call_res_from(value_of_number(*(i64*)&args->val.as.list));
 	} else if (args->val.type == LT_STRING) {
-		res.as.num = *(i64*)&args->val.as.string;
-		lret(res);
+		return call_res_from(value_of_number(*(i64*)&args->val.as.string));
 	} else if (args->val.type == LT_BUILTIN) {
-		res.as.num = *(i64*)&args->val.as.builtin.fn;
-		lret(res);
+		return call_res_from(value_of_number(*(i64*)&args->val.as.builtin->fn));
 	}
 
-	lret(nil);
+	return call_res_from(nil);
 }
 
 struct call_res lrepr(list_t args) {
@@ -1804,12 +1679,9 @@ struct call_res lrepr(list_t args) {
 	assert(args->next == NULL);
 
 	struct string_builder sb = {0};
-	lisp_val_repr(args->val, &sb);
+	value_repr(args->val, &sb);
 
-	lret(((struct lisp_val) {
-		.type = LT_STRING,
-		.as.string = sb_to_string(&sb),
-	}));
+	return call_res_from(value_of_string(sb_to_string(&sb)));
 }
 
 struct call_res lparse(list_t args) {
@@ -1825,81 +1697,55 @@ struct call_res lparse(list_t args) {
 	skip_ws(&str, &len);
 	if (len == 0) {
 		string_t tmp = string_from_str("");
-		res = list_append(res, (struct lisp_val) {
-			.type = LT_STRING,
-			.as.string = tmp,
-		});
-		string_free(tmp);
-		lret(((struct lisp_val) {
-			.type = LT_LIST,
-			.as.list = res,
-		}));
+		res = list_cons(value_of_string(tmp), res);
+		string_decrefs(tmp);
+		return call_res_from(value_of_list(res));
 	}
 
-	struct lisp_val parsed = lisp_val_parse(&str, &len);
+	lisp_value_t parsed = lisp_val_parse(&str, &len);
 	string_t tmp = string_substr(args->val.as.string, str - args->val.as.string->data, args->val.as.string->len);
-	res = list_append(res, (struct lisp_val) {
-		.type = LT_STRING,
-		.as.string = tmp,
-	});
-	string_free(tmp);
+	res = list_append(res, value_of_string(tmp));
+	string_decrefs(tmp);
 
 	res = list_append(res, parsed);
-	lisp_val_free(parsed);
+	value_decrefs(parsed);
 
-	lret(((struct lisp_val) {
-		.type = LT_LIST,
-		.as.list = res,
-	}));
+	return call_res_from(value_of_list(res));
 }
 
-struct lisp_val file_to_lisp_val(FILE *f) {
-	static struct lisp_val file_sym = {
-		.type = LT_SYM,
-		.as.sym = NULL,
-	};
-	if (file_sym.as.sym == NULL) {
-		file_sym.as.sym = sym_from_str("file");
-	}
-
+lisp_value_t file_to_lisp_val(FILE *f) {
 	list_t res = NULL;
-	res = list_append(res, file_sym);
-	res = list_append(res, (struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = *(i64*)&f,
-	});
+	res = list_append(res, file_symbol);
+	res = list_append(res, value_of_number(*(i64*)&f));
 
-	return (struct lisp_val) {
-		.type = LT_LIST,
-		.as.list = res,
-	};
+	return value_of_list(res);
 }
-FILE *lisp_val_to_file(struct lisp_val v) {
+FILE *lisp_val_to_file(lisp_value_t v) {
 	assert(v.type == LT_LIST);
 	assert(v.as.list != NULL);
-	assert(v.as.list->val.type == LT_SYM);
-	assert(strcmp(v.as.list->val.as.sym->sym, "file") == 0);
+	assert(v.as.list->val.type == LT_SYMBOL);
+	assert(strcmp(v.as.list->val.as.symbol->sym, "file") == 0);
 	assert(v.as.list->next != NULL);
-	assert(v.as.list->next->val.type == LT_NUM);
+	assert(v.as.list->next->val.type == LT_NUMBER);
 	assert(v.as.list->next->next == NULL);
 
-	return *(FILE**)&v.as.list->next->val.as.num;
+	return *(FILE**)&v.as.list->next->val.as.number;
 }
 
 struct call_res lopen(list_t args) {
 	assert(args != NULL);
-	assert(args->val.type == LT_STRING || args->val.type == LT_SYM);
+	assert(args->val.type == LT_STRING || args->val.type == LT_SYMBOL);
 	assert(args->next != NULL);
-	assert(args->next->val.type == LT_STRING || args->next->val.type == LT_SYM);
+	assert(args->next->val.type == LT_STRING || args->next->val.type == LT_SYMBOL);
 	assert(args->next->next == NULL);
 
 	const char *fname = args->val.type == LT_STRING
 		? strndup(args->val.as.string->data, args->val.as.string->len)
-		: args->val.as.sym->sym
+		: args->val.as.symbol->sym
 	;
 	const char *fmode = args->next->val.type == LT_STRING
 		? strndup(args->next->val.as.string->data, args->next->val.as.string->len)
-		: args->next->val.as.sym->sym
+		: args->next->val.as.symbol->sym
 	;
 
 	errno = 0;
@@ -1912,7 +1758,7 @@ struct call_res lopen(list_t args) {
 	if (args->val.type == LT_STRING) free((void*)fname);
 	if (args->next->val.type == LT_STRING) free((void*)fmode);
 
-	lret(file_to_lisp_val(res));
+	return call_res_from(file_to_lisp_val(res));
 }
 
 struct call_res lclose(list_t args) {
@@ -1923,7 +1769,7 @@ struct call_res lclose(list_t args) {
 	FILE *f = lisp_val_to_file(args->val);
 	fclose(f);
 
-	lret(nil);
+	return call_res_from(nil);
 }
 
 struct call_res lreadline(list_t args) {
@@ -1938,13 +1784,10 @@ struct call_res lreadline(list_t args) {
 	enum input_status is = input(&sb, f);
 
 	if (is == IS_EOF && sb.count == 0) {
-		lret(nil);
+		return call_res_from(nil);
 	}
 
-	lret(((struct lisp_val) {
-		.type = LT_STRING,
-		.as.string = sb_to_string(&sb),
-	}));
+	return call_res_from(value_of_string(sb_to_string(&sb)));
 }
 
 struct call_res lread(list_t args) {
@@ -1972,31 +1815,28 @@ struct call_res lread(list_t args) {
 		}
 	}
 
-	lret(((struct lisp_val) {
-		.type = LT_STRING,
-		.as.string = sb_to_string(&sb),
-	}));
+	return call_res_from(value_of_string(sb_to_string(&sb)));
 }
 
 struct call_res lwrite(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_LIST);
 	assert(args->next != NULL);
-	assert(args->next->val.type == LT_STRING || args->next->val.type == LT_NUM);
+	assert(args->next->val.type == LT_STRING || args->next->val.type == LT_NUMBER);
 	assert(args->next->next == NULL);
 
 	FILE *f = lisp_val_to_file(args->val);
 
-	if (args->next->val.type == LT_NUM) {
-		assert(0 <= args->next->val.as.num && args->next->val.as.num < 256);
+	if (args->next->val.type == LT_NUMBER) {
+		assert(0 <= args->next->val.as.number && args->next->val.as.number < 256);
 
-		fputc(args->next->val.as.num, f);
+		fputc(args->next->val.as.number, f);
 	} else {
 		const size_t written = fwrite(args->next->val.as.string->data, 1, args->next->val.as.string->len, f);
 		assert(written == args->next->val.as.string->len);
 	}
 
-	lret(nil);
+	return call_res_from(nil);
 }
 
 struct call_res lname(list_t args) {
@@ -2010,24 +1850,18 @@ struct call_res lname(list_t args) {
 
 		struct list_fn fn = list_to_fn(lfn);
 
-		if (fn.name == NULL) lret(nil);
+		if (fn.name == NULL) return call_res_from(nil);
 		else {
-			sym_t name = sym_copy(fn.name);
+			symbol_t name = symbol_copy(fn.name);
 			list_fn_free(fn);
-			lret(((struct lisp_val) {
-				.type = LT_SYM,
-				.as.sym = name,
-			}));
+			return call_res_from(value_of_symbol(name));
 		}
 	} else {
-		struct lbuiltin fn = args->val.as.builtin;
+		builtin_t fn = args->val.as.builtin;
 
-		if (fn.name != NULL) {
-			lret(((struct lisp_val) {
-				.type = LT_SYM,
-				.as.sym = sym_copy(fn.name),
-			}));
-		} else lret(nil);
+		if (fn->name != NULL) {
+			return call_res_from(value_of_symbol(symbol_copy(fn->name)));
+		} else return call_res_from(nil);
 	}
 }
 
@@ -2042,24 +1876,18 @@ struct call_res ldocs(list_t args) {
 
 		struct list_fn fn = list_to_fn(lfn);
 
-		if (fn.name == NULL) lret(nil);
+		if (fn.name == NULL) return call_res_from(nil);
 		else {
 			string_t doc = string_copy(fn.doc);
 			list_fn_free(fn);
-			lret(((struct lisp_val) {
-				.type = LT_STRING,
-				.as.string = doc,
-			}));
+			return call_res_from(value_of_string(doc));
 		}
 	} else {
-		struct lbuiltin fn = args->val.as.builtin;
+		builtin_t fn = args->val.as.builtin;
 
-		if (fn.doc != NULL) {
-			lret(((struct lisp_val) {
-				.type = LT_STRING,
-				.as.string = string_from_str(fn.doc),
-			}));
-		} else lret(nil);
+		if (fn->doc != NULL) {
+			return call_res_from(value_of_string(string_from_str(fn->doc)));
+		} else return call_res_from(nil);
 	}
 }
 
@@ -2074,17 +1902,11 @@ struct call_res lis_macro(list_t args) {
 
 		struct list_fn fn = list_to_fn(lfn);
 
-		lret(((struct lisp_val) {
-			.type = LT_BOOL,
-			.as.boo = fn.is_macro,
-		}));
+		return call_res_from(value_of_boolean(fn.is_macro));
 	} else {
-		struct lbuiltin fn = args->val.as.builtin;
+		builtin_t fn = args->val.as.builtin;
 
-		lret(((struct lisp_val) {
-			.type = LT_BOOL,
-			.as.boo = !fn.eval_args,
-		}));
+		return call_res_from(value_of_boolean(!fn->eval_args));
 	}
 }
 
@@ -2092,10 +1914,9 @@ struct call_res lis_callable(list_t args) {
 	assert(args != NULL);
 	assert(args->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_BOOL,
-		.as.boo = args->val.type == LT_BUILTIN || (args->val.type == LT_LIST && list_is_fn(args->val.as.list)),
-	}));
+	return call_res_from(value_of_boolean(
+		args->val.type == LT_BUILTIN || (args->val.type == LT_LIST && list_is_fn(args->val.as.list))
+	));
 }
 
 struct call_res llen_s(list_t args) {
@@ -2103,10 +1924,7 @@ struct call_res llen_s(list_t args) {
 	assert(args->val.type == LT_STRING);
 	assert(args->next == NULL);
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = args->val.as.string->len,
-	}));
+	return call_res_from(value_of_number(args->val.as.string->len));
 }
 
 struct call_res lffi_load(list_t args) {
@@ -2119,24 +1937,12 @@ struct call_res lffi_load(list_t args) {
 	free(libname);
 
 	if (lib == NULL) {
-		lret(((struct lisp_val) {
-			.type = LT_STRING,
-			.as.string = string_from_str(dlerror()),
-		}));
+		return call_res_from(value_of_string(string_from_str(dlerror())));
 	} else {
 		list_t res = NULL;
-		res = list_cons((struct lisp_val) {
-			.type = LT_NUM,
-			.as.num = *(i64*)&lib,
-		}, res);
-		res = list_cons((struct lisp_val) {
-			.type = LT_SYM,
-			.as.sym = sym_from_str("clib"),
-		}, res);
-		lret(((struct lisp_val) {
-			.type = LT_LIST,
-			.as.list = res,
-		}));
+		res = list_cons(value_of_number(*(i64*)&lib), res);
+		res = list_cons(value_copy(clib_symbol), res);
+		return call_res_from(value_of_list(res));
 	}
 }
 
@@ -2144,26 +1950,26 @@ struct call_res lffi_unload(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_LIST);
 	assert(args->val.as.list != NULL);
-	assert(args->val.as.list->val.type == LT_SYM);
-	assert(strcmp(args->val.as.list->val.as.sym->sym, "clib") == 0);
+	assert(args->val.as.list->val.type == LT_SYMBOL);
+	assert(strcmp(args->val.as.list->val.as.symbol->sym, "clib") == 0);
 	assert(args->val.as.list->next != NULL);
-	assert(args->val.as.list->next->val.type == LT_NUM);
+	assert(args->val.as.list->next->val.type == LT_NUMBER);
 	assert(args->val.as.list->next->next == NULL);
 	assert(args->next == NULL);
 
-	dlclose(*(void**)&args->val.as.list->next->val.as.num);
+	dlclose(*(void**)&args->val.as.list->next->val.as.number);
 
-	lret(nil);
+	return call_res_from(nil);
 }
 
 struct call_res lffi_sym(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_LIST);
 	assert(args->val.as.list != NULL);
-	assert(args->val.as.list->val.type == LT_SYM);
-	assert(strcmp(args->val.as.list->val.as.sym->sym, "clib") == 0);
+	assert(args->val.as.list->val.type == LT_SYMBOL);
+	assert(strcmp(args->val.as.list->val.as.symbol->sym, "clib") == 0);
 	assert(args->val.as.list->next != NULL);
-	assert(args->val.as.list->next->val.type == LT_NUM);
+	assert(args->val.as.list->next->val.type == LT_NUMBER);
 	assert(args->val.as.list->next->next == NULL);
 	assert(args->next != NULL);
 	assert(args->next->val.type == LT_STRING);
@@ -2171,31 +1977,19 @@ struct call_res lffi_sym(list_t args) {
 
 	dlerror();
 	char *symname = strndup(args->next->val.as.string->data, args->next->val.as.string->len);
-	void *sym = dlsym(*(void**)&args->val.as.list->next->val.as.num, symname);
+	void *sym = dlsym(*(void**)&args->val.as.list->next->val.as.number, symname);
 	free(symname);
 	const char *err = NULL;
 	if (sym == NULL && (err = dlerror()) != NULL) {
-		lret(((struct lisp_val) {
-			.type = LT_STRING,
-			.as.string = string_from_str(err),
-		}));
+		return call_res_from(value_of_string(string_from_str(err)));
 	} else {
 		list_t res = NULL;
-		res = list_cons((struct lisp_val) {
-			.type = LT_NUM,
-			.as.num = *(i64*)&sym,
-		}, res);
-		res = list_cons((struct lisp_val) {
-			.type = LT_SYM,
-			.as.sym = sym_from_str("csym"),
-		}, res);
-		lret(((struct lisp_val) {
-			.type = LT_LIST,
-			.as.list = res,
-		}));
+		res = list_cons(value_of_number(*(i64*)&sym), res);
+		res = list_cons(value_copy(csym_symbol), res);
+		return call_res_from(value_of_list(res));
 	}
 
-	lret(nil);
+	return call_res_from(nil);
 }
 
 enum ctype_basic {
@@ -2234,33 +2028,33 @@ struct ctype {
 	} inner_desc;
 };
 
-struct ctype parse_ctype(struct lisp_val val) {
-	if (val.type != LT_SYM && val.type != LT_LIST) {
+struct ctype parse_ctype(lisp_value_t val) {
+	if (val.type != LT_SYMBOL && val.type != LT_LIST) {
 		fputs("C types should either be a symbol, nil, or a list of C types!\n", stderr);
 		exit(1);
 	}
 
-	if (val.type == LT_SYM) {
-		if (strcmp(val.as.sym->sym, "i8") == 0) {
+	if (val.type == LT_SYMBOL) {
+		if (strcmp(val.as.symbol->sym, "i8") == 0) {
 			return (struct ctype) { .basic_type = CT_I8 };
-		} else if (strcmp(val.as.sym->sym, "u8") == 0) {
+		} else if (strcmp(val.as.symbol->sym, "u8") == 0) {
 			return (struct ctype) { .basic_type = CT_U8 };
-		} else if (strcmp(val.as.sym->sym, "i32") == 0) {
+		} else if (strcmp(val.as.symbol->sym, "i32") == 0) {
 			return (struct ctype) { .basic_type = CT_I32 };
-		} else if (strcmp(val.as.sym->sym, "u32") == 0) {
+		} else if (strcmp(val.as.symbol->sym, "u32") == 0) {
 			return (struct ctype) { .basic_type = CT_U32 };
-		} else if (strcmp(val.as.sym->sym, "i64") == 0) {
+		} else if (strcmp(val.as.symbol->sym, "i64") == 0) {
 			return (struct ctype) { .basic_type = CT_I64 };
-		} else if (strcmp(val.as.sym->sym, "u64") == 0) {
+		} else if (strcmp(val.as.symbol->sym, "u64") == 0) {
 			return (struct ctype) { .basic_type = CT_U64 };
-		} else if (strcmp(val.as.sym->sym, "f32") == 0) {
+		} else if (strcmp(val.as.symbol->sym, "f32") == 0) {
 			return (struct ctype) { .basic_type = CT_F32 };
-		} else if (strcmp(val.as.sym->sym, "f64") == 0) {
+		} else if (strcmp(val.as.symbol->sym, "f64") == 0) {
 			return (struct ctype) { .basic_type = CT_F64 };
-		} else if (strcmp(val.as.sym->sym, "ptr") == 0) {
+		} else if (strcmp(val.as.symbol->sym, "ptr") == 0) {
 			return (struct ctype) { .basic_type = CT_PTR };
 		} else {
-			fprintf(stderr, "Unknown C type `%s`\n", val.as.sym->sym);
+			fprintf(stderr, "Unknown C type `%s`\n", val.as.symbol->sym);
 			exit(1);
 		}
 	} else {
@@ -2300,46 +2094,46 @@ size_t get_struct_size(list_t struct_members) {
 	return res;
 }
 
-size_t construct_cval_into(struct ctype type, struct lisp_val from, void *memory) {
+size_t construct_cval_into(struct ctype type, lisp_value_t from, void *memory) {
 	switch (type.basic_type) {
 		case CT_I8: {
-			assert(from.type == LT_NUM);
-			assert(-(1<<7) <= from.as.num && from.as.num < (1<<7));
+			assert(from.type == LT_NUMBER);
+			assert(-(1<<7) <= from.as.number && from.as.number < (1<<7));
 
-			*(int8_t*)memory = from.as.num;
+			*(int8_t*)memory = from.as.number;
 			return ctype_size[CT_I8];
 		} break;
 		case CT_U8: {
-			assert(from.type == LT_NUM);
-			assert(0 <= from.as.num && from.as.num < (1<<8));
+			assert(from.type == LT_NUMBER);
+			assert(0 <= from.as.number && from.as.number < (1<<8));
 
-			*(uint8_t*)memory = from.as.num;
+			*(uint8_t*)memory = from.as.number;
 			return ctype_size[CT_U8];
 		} break;
 		case CT_I32: {
-			assert(from.type == LT_NUM);
-			assert(-(1l<<31) <= from.as.num && from.as.num < (1l<<31));
+			assert(from.type == LT_NUMBER);
+			assert(-(1l<<31) <= from.as.number && from.as.number < (1l<<31));
 
-			*(int32_t*)memory = from.as.num;
+			*(int32_t*)memory = from.as.number;
 			return ctype_size[CT_I32];
 		} break;
 		case CT_U32: {
-			assert(from.type == LT_NUM);
-			assert(0 <= from.as.num && from.as.num < (1l<<32));
+			assert(from.type == LT_NUMBER);
+			assert(0 <= from.as.number && from.as.number < (1l<<32));
 
-			*(uint32_t*)memory = from.as.num;
+			*(uint32_t*)memory = from.as.number;
 			return ctype_size[CT_U32];
 		} break;
 		case CT_I64: {
-			assert(from.type == LT_NUM);
+			assert(from.type == LT_NUMBER);
 
-			*(i64*)memory = from.as.num;
+			*(i64*)memory = from.as.number;
 			return ctype_size[CT_I64];
 		} break;
 		case CT_U64: {
-			assert(from.type == LT_NUM);
+			assert(from.type == LT_NUMBER);
 
-			*(u64*)memory = *(u64*)&from.as.num;
+			*(u64*)memory = *(u64*)&from.as.number;
 			return ctype_size[CT_U64];
 		} break;
 		case CT_F32: {
@@ -2355,12 +2149,12 @@ size_t construct_cval_into(struct ctype type, struct lisp_val from, void *memory
 		case CT_PTR: {
 			assert(from.type == LT_LIST);
 			assert(from.as.list != NULL);
-			assert(from.as.list->val.type == LT_SYM);
-			assert(strcmp(from.as.list->val.as.sym->sym, "pointer") == 0);
-			assert(from.as.list->next->val.type == LT_NUM);
+			assert(from.as.list->val.type == LT_SYMBOL);
+			assert(strcmp(from.as.list->val.as.symbol->sym, "pointer") == 0);
+			assert(from.as.list->next->val.type == LT_NUMBER);
 			assert(from.as.list->next->next == NULL);
 
-			*(void**)memory = *(void**)&from.as.list->next->val.as.num;
+			*(void**)memory = *(void**)&from.as.list->next->val.as.number;
 			return ctype_size[CT_PTR];
 		} break;
 		case CT_VOID: {
@@ -2427,49 +2221,31 @@ size_t construct_cval_into(struct ctype type, struct lisp_val from, void *memory
 	assert(false && "unreachable");
 }
 
-struct lisp_val destruct_cval_from(struct ctype type, void *memory, size_t *size) {
+lisp_value_t destruct_cval_from(struct ctype type, void *memory, size_t *size) {
 	switch (type.basic_type) {
 		case CT_I8: {
 			*size = ctype_size[CT_I8];
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(int8_t*)memory,
-			};
+			return value_of_number(*(int8_t*)memory);
 		} break;
 		case CT_U8: {
 			*size = ctype_size[CT_U8];
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(uint8_t*)memory,
-			};
+			return value_of_number(*(uint8_t*)memory);
 		} break;
 		case CT_I32: {
 			*size = ctype_size[CT_I32];
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(int32_t*)memory,
-			};
+			return value_of_number(*(int32_t*)memory);
 		} break;
 		case CT_U32: {
 			*size = ctype_size[CT_U32];
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(uint32_t*)memory,
-			};
+			return value_of_number(*(uint32_t*)memory);
 		} break;
 		case CT_I64: {
 			*size = ctype_size[CT_I64];
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(i64*)memory,
-			};
+			return value_of_number(*(i64*)memory);
 		} break;
 		case CT_U64: {
 			*size = ctype_size[CT_U64];
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(i64*)memory,
-			};
+			return value_of_number(*(i64*)memory);
 		} break;
 		case CT_F32: {
 			// TODO:
@@ -2485,18 +2261,9 @@ struct lisp_val destruct_cval_from(struct ctype type, void *memory, size_t *size
 			// fprintf(stderr, "Constructing pointer from memory location %p to get value %p.\n", memory, *(void**)memory);
 			*size = ctype_size[CT_PTR];
 			list_t res = NULL;
-			res = list_cons((struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(i64*)memory,
-			}, res);
-			res = list_cons((struct lisp_val) {
-				.type = LT_SYM,
-				.as.sym = sym_from_str("pointer"),
-			}, res);
-			return (struct lisp_val) {
-				.type = LT_LIST,
-				.as.list = res,
-			};
+			res = list_cons(value_of_number(*(i64*)memory), res);
+			res = list_cons(pointer_symbol, res);
+			return value_of_list(res);
 		} break;
 		case CT_VOID: {
 			fputs("Void type cannot be constructed in memory!\n", stderr);
@@ -2510,7 +2277,7 @@ struct lisp_val destruct_cval_from(struct ctype type, void *memory, size_t *size
 	assert(false && "unreachable");
 }
 
-void *create_cval(struct ctype type, struct lisp_val from) {
+void *create_cval(struct ctype type, lisp_value_t from) {
 	void *val;
 	if (type.basic_type == CT_VOID) {
 		fputs("Void type should never be passed as a parameter!\n", stderr);
@@ -2592,42 +2359,27 @@ void free_ffi_type(ffi_type *type) {
 	}
 }
 
-struct lisp_val cval_to_lisp_val(struct ctype type, ffi_arg *cval) {
+lisp_value_t cval_to_lisp_val(struct ctype type, ffi_arg *cval) {
 	switch (type.basic_type) {
 		case CT_VOID: {
 			return nil;
 		} break;
 		case CT_I8: {
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(int8_t*)cval,
-			};
+			return value_of_number(*(int8_t*)cval);
 		} break;
 		case CT_U8: {
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(uint8_t*)cval,
-			};
+			return value_of_number(*(uint8_t*)cval);
 		} break;
 		case CT_I32: {
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(int32_t*)cval,
-			};
+			return value_of_number(*(int32_t*)cval);
 		} break;
 		case CT_U32: {
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(uint32_t*)cval,
-			};
+			return value_of_number(*(uint32_t*)cval);
 		} break;
 		case CT_I64:
 		case CT_U64:
 		{
-			return (struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(i64*)cval,
-			};
+			return value_of_number(*(i64*)cval);
 		} break;
 		case CT_F32: {
 			fputs("error: ffi float handling not implemented yet!\n", stderr);
@@ -2639,18 +2391,9 @@ struct lisp_val cval_to_lisp_val(struct ctype type, ffi_arg *cval) {
 		} break;
 		case CT_PTR: {
 			list_t res = NULL;
-			res = list_cons((struct lisp_val) {
-				.type = LT_NUM,
-				.as.num = *(i64*)cval,
-			}, res);
-			res = list_cons((struct lisp_val) {
-				.type = LT_SYM,
-				.as.sym = sym_from_str("pointer"),
-			}, res);
-			return (struct lisp_val) {
-				.type = LT_LIST,
-				.as.list = res,
-			};
+			res = list_cons(value_of_number(*(i64*)cval), res);
+			res = list_cons(pointer_symbol, res);
+			return value_of_list(res);
 		} break;
 		case CT_STRUCT: {
 			fputs("error: ffi struct handling not implemented yet!\n", stderr);
@@ -2665,14 +2408,14 @@ struct call_res lffi_call(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_LIST);
 	assert(args->val.as.list != NULL);
-	assert(args->val.as.list->val.type == LT_SYM);
-	assert(strcmp(args->val.as.list->val.as.sym->sym, "csym") == 0);
+	assert(args->val.as.list->val.type == LT_SYMBOL);
+	assert(strcmp(args->val.as.list->val.as.symbol->sym, "csym") == 0);
 	assert(args->val.as.list->next != NULL);
-	assert(args->val.as.list->next->val.type == LT_NUM);
+	assert(args->val.as.list->next->val.type == LT_NUMBER);
 	assert(args->val.as.list->next->next == NULL);
 	assert(args->next != NULL);
 
-	void *func = *(void**)&args->val.as.list->next->val.as.num;
+	void *func = *(void**)&args->val.as.list->next->val.as.numbol;
 
 	ffi_cif cif;
 	struct {
@@ -2702,7 +2445,7 @@ struct call_res lffi_call(list_t args) {
 		args = args->next->next;
 	}
 
-	struct lisp_val ret = nil;
+	lisp_value_t ret = nil;
 
 	// fprintf(stderr, "Calling function %p with %lu arguments...\n", func, cargs.count);
 	if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, cargs.count, ffi_return_type, cargs.items) != FFI_OK) {
@@ -2726,7 +2469,7 @@ finish:
 	da_free(&cvals);
 	free_ffi_type(ffi_return_type);
 
-	lret(ret);
+	return call_res_from(ret);
 }
 
 struct call_res lstring_data_ptr(list_t args) {
@@ -2735,29 +2478,20 @@ struct call_res lstring_data_ptr(list_t args) {
 	assert(args->next == NULL);
 
 	list_t res = NULL;
-	res = list_cons((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = *(i64*)&args->val.as.string->data,
-	 }, res);
-	res = list_cons((struct lisp_val) {
-		.type = LT_SYM,
-		.as.sym = sym_from_str("pointer"),
-	 }, res);
+	res = list_cons(value_of_number(*(i64*)&args->val.as.string->data), res);
+	res = list_cons(pointer_symbol, res);
 
-	lret(((struct lisp_val) {
-		.type = LT_LIST,
-		.as.list = res,
-	}));
+	return call_res_from(value_of_list(res));
 }
 
 struct call_res lconstruct_val(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_LIST);
 	assert(args->val.as.list != NULL);
-	assert(args->val.as.list->val.type == LT_SYM);
-	assert(strcmp(args->val.as.list->val.as.sym->sym, "pointer") == 0);
+	assert(args->val.as.list->val.type == LT_SYMBOL);
+	assert(strcmp(args->val.as.list->val.as.symbol->sym, "pointer") == 0);
 	assert(args->val.as.list->next != NULL);
-	assert(args->val.as.list->next->val.type == LT_NUM);
+	assert(args->val.as.list->next->val.type == LT_NUMBER);
 	assert(args->val.as.list->next->next == NULL);
 	assert(args->next != NULL);
 	assert(args->next->next != NULL);
@@ -2768,23 +2502,20 @@ struct call_res lconstruct_val(list_t args) {
 	const size_t size = construct_cval_into(
 		type,
 		args->next->next->val,
-		*(void**)&args->val.as.list->next->val.as.num
+		*(void**)&args->val.as.list->next->val.as.number
 	);
 
-	lret(((struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = *(i64*)&size,
-	}));
+	return call_res_from(value_of_number(*(i64*)&size));
 }
 
 struct call_res ldestruct_val(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_LIST);
 	assert(args->val.as.list != NULL);
-	assert(args->val.as.list->val.type == LT_SYM);
-	assert(strcmp(args->val.as.list->val.as.sym->sym, "pointer") == 0);
+	assert(args->val.as.list->val.type == LT_SYMBOL);
+	assert(strcmp(args->val.as.list->val.as.symbol->sym, "pointer") == 0);
 	assert(args->val.as.list->next != NULL);
-	assert(args->val.as.list->next->val.type == LT_NUM);
+	assert(args->val.as.list->next->val.type == LT_NUMBER);
 	assert(args->val.as.list->next->next == NULL);
 	assert(args->next != NULL);
 	assert(args->next->next == NULL);
@@ -2792,25 +2523,21 @@ struct call_res ldestruct_val(list_t args) {
 	struct ctype type = parse_ctype(args->next->val);
 
 	size_t read_size = 0;
-	struct lisp_val val = destruct_cval_from(
+	lisp_value_t val = destruct_cval_from(
 		type,
 		*(void**)&args->val.as.list->next->val.as.num,
 		&read_size
 	);
-	struct lisp_val val_size = (struct lisp_val) {
-		.type = LT_NUM,
-		.as.num = *(i64*)&read_size,
-	};
+	lisp_value_t val_size = value_of_number(*(i64*)&read_size);
 
-	lret(((struct lisp_val) {
-		.type = LT_LIST,
-		.as.list = list_cons(val, list_cons(val_size, NULL)),
-	}));
+	return call_res_from(value_of_list(
+		list_cons(val, list_cons(val_size, NULL))
+	));
 }
 
 struct {
 	const char *name;
-	struct lbuiltin fn;
+	struct builtin fn;
 } BUILTINS[] = {
 	{ "+", { ladd, true, NULL,
 		"  num... -> the sum of the inputs"
@@ -3013,7 +2740,7 @@ struct {
 	} },
 };
 
-struct lisp_val last_res;
+lisp_value_t last_res;
 void destroy_envs(int n) {
 	while (n) {
 		assert(curr_env->parent != NULL);
@@ -3023,47 +2750,41 @@ void destroy_envs(int n) {
 		--n;
 	}
 }
-struct lisp_val eval(struct lisp_val val) {
+lisp_value_t eval(lisp_value_t val) {
 	int envs = 0;
 	bool tailcall = false;
 
-	val = lisp_val_copy(val);
+	value_increfs(val);
 
 recurse:
 	switch (val.type) {
-		case LT_SYM: {
-			if (strcmp(val.as.sym->sym, "_") == 0) {
+		case LT_SYMBOL: {
+			if (strcmp(val.as.symbol->sym, "_") == 0) {
 				destroy_envs(envs);
-				lisp_val_free(val);
-				return lisp_val_copy(last_res);
+				value_decrefs(val);
+				return value_copy(last_res);
 			}
 
-			struct assoc *assoc = find_var(curr_env, val.as.sym);
+			struct assoc *assoc = find_var(curr_env, val.as.symbol);
 			if (assoc != NULL) {
-				struct lisp_val res = lisp_val_copy(assoc->value);
+				lisp_value_t res = value_copy(assoc->value);
 				destroy_envs(envs);
-				lisp_val_free(val);
+				value_decrefs(val);
 				return res;
 			}
 
 			for (size_t i = 0; i < sizeof(BUILTINS)/sizeof(*BUILTINS); ++i) {
-				if (strcmp(val.as.sym->sym, BUILTINS[i].name) == 0) {
+				if (strcmp(val.as.symbol->sym, BUILTINS[i].name) == 0) {
 					destroy_envs(envs);
-					lisp_val_free(val);
-					return (struct lisp_val) {
-						.type = LT_BUILTIN,
-						.as.builtin = BUILTINS[i].fn,
-					};
+					value_decrefs(val);
+					return value_of_builtin(&BUILTINS[i].fn);
 				}
 			}
 
-			fprintf(stderr, "undefined symbol `%s`\n", val.as.sym->sym);
+			fprintf(stderr, "undefined symbol `%s`\n", val.as.symbol->sym);
 			destroy_envs(envs);
-			lisp_val_free(val);
-			return (struct lisp_val) {
-				.type = LT_LIST,
-				.as.list = NULL,
-			};
+			value_decrefs(val);
+			return nil;
 		} break;
 		case LT_LIST: {
 			if (val.as.list == NULL) {
@@ -3071,7 +2792,7 @@ recurse:
 				return val;
 			}
 
-			struct lisp_val fn = eval(val.as.list->val);
+			lisp_value_t fn = eval(val.as.list->val);
 			if (fn.type != LT_BUILTIN && fn.type != LT_LIST) {
 				fputs("error: tried calling value ", stderr);
 				lisp_val_print(fn, stderr);
@@ -3366,6 +3087,10 @@ void helptext(const char *prog, FILE *f) {
 }
 
 int main(int argc, char **argv) {
+#define X(name, value) name ## _symbol = value_of_symbol(symbol_from_str(value));
+	LIST_OF_PREDEFINED_SYMBOLS
+#undef X
+
 	for (size_t i = 0; i < sizeof(BUILTINS)/sizeof(*BUILTINS); ++i) {
 		BUILTINS[i].fn.name = sym_from_str(BUILTINS[i].name);
 	}
