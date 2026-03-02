@@ -357,8 +357,11 @@ enum cmp_result number_cmp(const lisp_number_t lhs, const lisp_number_t rhs) {
 // (CALL RESULT)
 
 struct call_res {
-#error TODO
+	lisp_value_t result;
+	bool destroy_env;
+	bool eval;
 };
+#define call_res_from(value, ...) ((struct call_res) { .result = (value), .destroy_env = false, .eval = false, __VA_ARGS__ })
 
 // BUILTINS
 
@@ -635,15 +638,74 @@ lisp_ ## type_name ## _t type_name ## _copy(lisp_ ## type_name ## _t this) { \
 LIST_OF_GCD_TYPES
 #undef X
 
+/* SECTION: ENVIRONMENTS */
+
+struct assoc {
+	lisp_symbol_t name;
+	lisp_value_t value;
+};
+struct env {
+	struct env *parent;
+	bool fixed;
+	lisp_list_t params_of;
+
+	struct assoc *items;
+	size_t count;
+	size_t capacity;
+};
+
+#define env_foreach(env, it) da_foreach(env, struct assoc, it)
+void env_def(struct env *env, lisp_symbol_t name, lisp_value_t value);
+struct assoc *find_var(struct env *env, const lisp_symbol_t name);
+void env_clear(struct env *env);
+void env_free(struct env *env);
+
+void env_def(struct env *env, lisp_symbol_t name, lisp_value_t value) {
+	da_append(env, ((struct assoc) { symbol_copy(name), value_copy(value), }));
+}
+struct assoc *find_var(struct env *env, const lisp_symbol_t name) {
+	if (env == NULL) return NULL;
+
+	size_t i = env->count;
+	while (i --> 0) {
+		if (symbol_cmp(env->items[i].name, name) == CMP_EQ) return &env->items[i];
+	}
+
+	return find_var(env->parent, name);
+}
+void env_clear(struct env *env) {
+	assert(env != NULL);
+
+	if (env->params_of) {
+		list_decrefs(env->params_of);
+		env->params_of = NULL;
+	}
+
+	env_foreach(env, it) {
+		symbol_decrefs(it->name);
+		value_decrefs(it->value);
+	}
+
+	// if the env is used after being freed,
+	// this ensures that the program crashes early
+	// rather than trucking on like nothing's wrong
+	memset(env->items, 0, sizeof(*env->items)*env->capacity);
+	free(env->items);
+
+	env->count = 0;
+	env->capacity = 0;
+}
+void env_free(struct env *env) {
+	assert(env != NULL);
+
+	env_clear(env);
+	*env = (struct env) {0};
+	free(env);
+}
+
 /* SECTION: REFACTOR PENDING */
 
 void lisp_val_print(struct lisp_val this, FILE *f);
-
-struct call_res {
-	struct lisp_val val;
-	bool destroy_env;
-	bool eval;
-};
 
 void list_print(list_t this, FILE *f);
 
@@ -1034,81 +1096,9 @@ struct lisp_val lisp_val_parse(const char **str, size_t *str_len) {
 	}
 }
 
-struct assoc {
-	sym_t name;
-	struct lisp_val value;
-};
-struct env {
-	struct env *parent;
-	bool fixed;
-	list_t params_of;
-
-	struct assoc *items;
-	size_t count;
-	size_t capacity;
-};
-#define env_for_each(env, it) for (struct assoc *it = (env)->items; it < (env)->items + (env)->count; ++it)
-void env_add(struct env *env, struct assoc item) {
-	assert(env != NULL);
-
-	if (env->items == NULL) {
-		env->items = malloc(sizeof(*env->items)*64);
-		env->count = 0;
-		env->capacity = 64;
-	}
-
-	if (env->count == env->capacity) {
-		env->capacity *= 2;
-		env->items = realloc(env->items, sizeof(*env->items)*env->capacity);
-	}
-
-	env->items[env->count++] = item;
-}
-void env_def(struct env *env, sym_t name, struct lisp_val value) {
-	env_add(env, (struct assoc) { sym_copy(name), lisp_val_copy(value) });
-}
-struct assoc *find_var(struct env *env, sym_t name) {
-	if (env == NULL) {
-		return NULL;
-	}
-
-	size_t i = env->count;
-	while (i --> 0) {
-		if (strcmp(env->items[i].name->sym, name->sym) == 0) return &env->items[i];
-	}
-
-	return find_var(env->parent, name);
-}
-void env_clear(struct env *env) {
-	assert(env != NULL);
-
-	if (env->params_of) {
-		list_free(env->params_of);
-		env->params_of = NULL;
-	}
-
-	env_for_each(env, it) {
-		sym_free(it->name);
-		lisp_val_free(it->value);
-	}
-	memset(env->items, 0, sizeof(*env->items)*env->capacity);
-	free(env->items);
-	env->count = 0;
-	env->capacity = 0;
-}
-void env_free(struct env *env) {
-	assert(env != NULL);
-
-	env_clear(env);
-	*env = (struct env) {0};
-	free(env);
-}
-
 struct sym _nil_sym = { .sym = "nil", .refcount = 1 };
 struct env root_env = {0};
 struct env *curr_env = &root_env;
-
-#define lret(_val, ...) return (struct call_res) { .val = _val, .eval = false, .destroy_env = false, __VA_ARGS__ }
 
 struct call_res ladd(list_t args) {
 	assert(args != NULL);
