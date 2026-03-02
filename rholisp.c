@@ -160,8 +160,10 @@ typedef struct string *string_t;
 typedef string_t lisp_string_t;
 
 enum cmp_result value_cmp(const lisp_value_t lhs, const lisp_value_t rhs);
+void value_repr(const lisp_value_t this, struct string_builder *sb);
 #define X(type_name, _) \
-enum cmp_result type_name ## _cmp(const lisp_ ## type_name ## _t lhs, const lisp_ ## type_name ## _t rhs);
+enum cmp_result type_name ## _cmp(const lisp_ ## type_name ## _t lhs, const lisp_ ## type_name ## _t rhs); \
+void type_name ## _repr(const lisp_ ## type_name ## _t this, struct string_builder *sb);
 LIST_OF_LISP_TYPES
 #undef X
 
@@ -278,7 +280,10 @@ struct call_res _list_call(
 
 string_t string_from_strn(const char *str, size_t len);
 string_t string_from_str(const char *str);
+string_t string_from_sb(struct string_builder *sb);
 string_t string_substr(string_t of, size_t begin, size_t end);
+// WARNING: consumes the string builder!
+string_t sb_to_string(struct string_builder *sb);
 
 /* SECTION: LISP TYPES AND VALUES (DEFINITION) */
 
@@ -301,6 +306,16 @@ enum cmp_result value_cmp(const lisp_value_t lhs, const lisp_value_t rhs) {
 	switch (lhs.type) {
 #define X(type_name, enum_name) \
 		case enum_name: return type_name ## _cmp(lhs.as.type_name, rhs.as.type_name);
+		LIST_OF_LISP_TYPES
+#undef X
+	}
+
+	assert(false && "unreachable");
+}
+void value_repr(const lisp_value_t this, struct string_builder *sb) {
+	switch (this.type) {
+#define X(type_name, enum_name) \
+		case enum_name: { type_name ## _repr(this.as.type_name, sb); } break;
 		LIST_OF_LISP_TYPES
 #undef X
 	}
@@ -353,6 +368,35 @@ LIST_OF_LISP_TYPES
 enum cmp_result number_cmp(const lisp_number_t lhs, const lisp_number_t rhs) {
 	return lhs < rhs ? CMP_LT : lhs > rhs ? CMP_GT : CMP_EQ;
 }
+void number_repr(const lisp_number_t this, struct string_builder *sb) {
+	u64 uthis = *(u64*)&this;
+
+	if (this < 0) {
+		sb_addc(sb, '-');
+		uthis = 1+~uthis; // negate using two's complement
+		// this is done this way since the negation of -2**63 is not representable in the i64 type
+	}
+	if (this == 0) {
+		sb_addc(sb, '0');
+		return;
+	}
+
+	// construct the number in least-significant-digit-first order
+	const size_t begin = sb->count;
+	while (uthis) {
+		sb_addc(sb, '0'+(uthis%10));
+		uthis /= 10;
+	}
+	const size_t len = sb->count - begin;
+
+	// reverse the lsdf representation to get most-significant-digit-first
+	for (size_t i = 0; i < len/2; ++i) {
+		// swap repr[i] and repr[len-1 - i]
+		const char tmp = sb->items[begin + i];
+		sb->items[begin + i] = sb->items[begin+len-1 - i];
+		sb->items[begin+len-1 - 1] = tmp;
+	}
+}
 
 // (CALL RESULT)
 
@@ -380,6 +424,17 @@ struct builtin {
 enum cmp_result builtin_cmp(const lisp_builtin_t lhs, const lisp_builtin_t rhs) {
 	assert(false && "TODO");
 }
+void builtin_repr(const lisp_builtin_t this, struct string_builder *sb) {
+	if (this->eval_args) {
+		sb_adds(sb, "<builtin function ");
+		symbol_repr(this->name, sb);
+		sb_addc(sb, '>');
+	} else {
+		sb_adds(sb, "<builtin macro ");
+		symbol_repr(this->name, sb);
+		sb_addc(sb, '>');
+	}
+}
 
 // + misc +
 
@@ -405,6 +460,9 @@ enum cmp_result symbol_cmp(const symbol_t lhs, const symbol_t rhs) {
 	if (lhs == rhs) return CMP_EQ;
 	const int cmpres = strcmp(lhs->sym, rhs->sym);
 	return cmpres < 0 ? CMP_LT : cmpres > 0 ? CMP_GT : CMP_EQ;
+}
+void symbol_repr(const lisp_symbol_t this, struct string_builder *sb) {
+	sb_adds(sb, this->sym);
 }
 def_trivial_increfs(symbol)
 def_trivial_decrefs(symbol)
@@ -445,10 +503,27 @@ struct list {
 	size_t refcount;
 };
 
+const struct value nil = {
+	.type = LT_LIST,
+	.as.list = NULL,
+};
+
 // + required functions +
 
-enum cmp_result list_cmp(const list_t lhs, const list_t rhs) {
+enum cmp_result list_cmp(const lisp_list_t lhs, const lisp_list_t rhs) {
 	assert(false && "TODO");
+}
+void list_repr(const lisp_list_t this, struct string_builder *sb) {
+	sb_addc(sb, '(');
+
+	lisp_list_t curr = this;
+	while (curr != NULL) {
+		value_repr(curr->val, sb);
+		if (curr->next != NULL) sb_addc(sb, ' ');
+		curr = curr->next;
+	}
+
+	sb_addc(sb, ')');
 }
 void list_increfs(lisp_list_t this) {
 	assert(this != NULL);
@@ -564,11 +639,26 @@ struct call_res _list_call(
 
 // + required functions +
 
-enum cmp_result bool_cmp(bool lhs, bool rhs) {
+enum cmp_result boolean_cmp(const lisp_boolean_t lhs, const lisp_boolean_t rhs) {
 	return lhs < rhs ? CMP_LT : lhs > rhs ? CMP_GT : CMP_EQ;
+}
+void boolean_repr(const lisp_boolean_t this, struct string_builder *sb) {
+	sb_addc(sb, this ? 'T' : 'F');
 }
 
 // STRINGS
+
+const char escapes[][2] = {
+	{ '\0', '0', },
+	{ '\t', 't', },
+	{ '\v', 'v', },
+	{ '\r', 'r', },
+	{ '\n', 'n', },
+	{ '\\', '\\', },
+	{ '"', '"', },
+	{ '\a', 'a', },
+	{ '\b', 'b', },
+};
 
 struct string {
 	char *data;
@@ -580,8 +670,23 @@ struct string {
 
 // + required functions +
 
-enum cmp_result string_cmp(const string_t lhs, const string_t rhs) {
+enum cmp_result string_cmp(const lisp_string_t lhs, const lisp_string_t rhs) {
 	assert(false && "TODO");
+}
+void string_repr(const lisp_string_t this, struct string_builder *sb) {
+	sb_addc(sb, '"');
+	for (size_t i = 0; i < this->len; ++i) {
+		for (size_t j = 0; j < sizeof(escapes)/sizeof(*escapes); ++j) {
+			if (escapes[j][0] == this->data[i]) {
+				sb_addc(sb, '\\');
+				sb_addc(sb, escapes[j][1]);
+				goto escaped;
+			}
+		}
+		sb_addc(sb, this->data[i]);
+	escaped:;
+	}
+	sb_addc(sb, '"');
 }
 def_trivial_increfs(string)
 def_trivial_decrefs(string)
@@ -608,6 +713,9 @@ string_t string_from_strn(const char *str, size_t len) {
 string_t string_from_str(const char *str) {
 	return string_from_strn(str, strlen(str));
 }
+string_t string_from_sb(struct string_builder *sb) {
+	return string_from_strn(sb->items, sb->count);
+}
 string_t string_substr(string_t of, size_t begin, size_t end) {
 	assert(of != NULL);
 	assert(begin <= end);
@@ -620,6 +728,22 @@ string_t string_substr(string_t of, size_t begin, size_t end) {
 		.borrows = string_copy(of),
 		.refcount = 1,
 	};
+	return res;
+}
+string_t sb_to_string(struct string_builder *sb) {
+	string_t res = malloc(sizeof(*res));
+	*res = (struct string) {
+		.data = sb->items,
+		.len = sb->count,
+		.borrows = NULL,
+		.refcount = 1,
+	};
+
+	sb->items = NULL;
+	sb->count = 0;
+	sb->capacity = 0;
+	sb_clear(sb);
+
 	return res;
 }
 
@@ -704,168 +828,6 @@ void env_free(struct env *env) {
 }
 
 /* SECTION: REFACTOR PENDING */
-
-void lisp_val_print(struct lisp_val this, FILE *f);
-
-void list_print(list_t this, FILE *f);
-
-const struct lisp_val nil = {
-	.type = LT_LIST,
-	.as.list = NULL,
-};
-
-void lisp_val_print(struct lisp_val this, FILE *f);
-const char escapes[][2] = {
-	{ '\0', '0', },
-	{ '\t', 't', },
-	{ '\v', 'v', },
-	{ '\r', 'r', },
-	{ '\n', 'n', },
-	{ '\\', '\\', },
-	{ '"', '"', },
-	{ '\a', 'a', },
-	{ '\b', 'b', },
-};
-void string_print(string_t this, FILE *f) {
-	fputc('"', f);
-	for (size_t i = 0; i < this->len; ++i) {
-		for (size_t j = 0; j < sizeof(escapes)/sizeof(*escapes); ++j) {
-			if (escapes[j][0] == this->data[i]) {
-				fputc('\\', f);
-				fputc(escapes[j][1], f);
-				goto escaped;
-			}
-		}
-		fputc(this->data[i], f);
-escaped:;
-	}
-	fputc('"', f);
-}
-void list_print(list_t this, FILE *f) {
-	fputc('(', f);
-	while (this != NULL) {
-		lisp_val_print(this->val, f);
-		if (this->next != NULL) {
-			fputc(' ', f);
-		}
-		this = this->next;
-	}
-	fputc(')', f);
-}
-
-void lisp_val_print(struct lisp_val this, FILE *f) {
-	switch (this.type) {
-		case LT_NUM: {
-			fprintf(f, "%ld", this.as.num);
-		} break;
-		case LT_BUILTIN: {
-			fputs(this.as.builtin.eval_args ? "<builtin function>" : "<builtin macro>", f);
-		} break;
-		case LT_SYM: {
-			fputs(this.as.sym->sym, f);
-		} break;
-		case LT_LIST: {
-			list_print(this.as.list, f);
-		} break;
-		case LT_BOOL: {
-			fputc(this.as.boo ? 'T' : 'F', f);
-		} break;
-		case LT_STRING: {
-			string_print(this.as.string, f);
-		} break;
-	}
-}
-
-string_t sb_to_string(struct string_builder *sb) {
-	string_t res = malloc(sizeof(*res));
-	*res = (struct string) {
-		.data = sb->items,
-		.len = sb->count,
-
-		.borrows = NULL,
-		.refcount = 1,
-	};
-
-	sb->items = NULL;
-	sb_clear(sb);
-
-	return res;
-}
-
-void lisp_val_repr(struct lisp_val this, struct string_builder *sb);
-void string_repr(string_t this, struct string_builder *sb) {
-	sb_addc(sb, '"');
-	for (size_t i = 0; i < this->len; ++i) {
-		for (size_t j = 0; j < sizeof(escapes)/sizeof(*escapes); ++j) {
-			if (escapes[j][0] == this->data[i]) {
-				sb_addc(sb, '\\');
-				sb_addc(sb, escapes[j][1]);
-				goto escaped;
-			}
-		}
-		sb_addc(sb, this->data[i]);
-escaped:;
-	}
-	sb_addc(sb, '"');
-}
-void list_repr(list_t this, struct string_builder *sb) {
-	sb_addc(sb, '(');
-	while (this != NULL) {
-		lisp_val_repr(this->val, sb);
-		if (this->next != NULL) {
-			sb_addc(sb, ' ');
-		}
-		this = this->next;
-	}
-	sb_addc(sb, ')');
-}
-
-void num_repr(i64 this, struct string_builder *sb) {
-	uint64_t uthis = *(uint64_t*)&this;
-	if (this < 0) {
-		sb_addc(sb, '-');
-		uthis = 1+~uthis;
-	}
-	if (this == 0) {
-		sb_addc(sb, '0');
-		return;
-	}
-	const size_t begin = sb->count;
-	while (uthis) {
-		sb_addc(sb, '0'+(uthis%10));
-		uthis /= 10;
-	}
-	const size_t len = sb->count - begin;
-
-	for (size_t i = 0; i < len/2; ++i) {
-		const char tmp = sb->items[begin + i];
-		sb->items[begin + i] = sb->items[begin+len-1 - i];
-		sb->items[begin+len-1 - i] = tmp;
-	}
-}
-
-void lisp_val_repr(struct lisp_val this, struct string_builder *sb) {
-	switch (this.type) {
-		case LT_NUM: {
-			num_repr(this.as.num, sb);
-		} break;
-		case LT_BUILTIN: {
-			sb_adds(sb, this.as.builtin.eval_args ? "<builtin function>" : "<builtin macro>");
-		} break;
-		case LT_SYM: {
-			sb_adds(sb, this.as.sym->sym);
-		} break;
-		case LT_LIST: {
-			list_repr(this.as.list, sb);
-		} break;
-		case LT_BOOL: {
-			sb_addc(sb, this.as.boo ? 'T' : 'F');
-		} break;
-		case LT_STRING: {
-			string_repr(this.as.string, sb);
-		} break;
-	}
-}
 
 bool lisp_val_is_truthy(struct lisp_val this) {
 	switch (this.type) {
