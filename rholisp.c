@@ -72,6 +72,8 @@ void sb_clear(struct string_builder *sb) {
 	da_free(sb);
 }
 
+/* SECTION: INPUT */
+
 struct string_builder line_builder = {0};
 size_t line_len;
 char *line;
@@ -103,75 +105,271 @@ enum input_status input(struct string_builder *line_builder, FILE *infile) {
 	return eof ? IS_EOF : IS_SUCCESS;
 }
 
+/* SECTION: LISP TYPES AND VALUES (DECLARATION) */
+
+// the types said value can take on
 enum lisp_type {
 	LT_NUM,
 	LT_BUILTIN,
 	LT_SYM,
 	LT_LIST,
-	LT_BOOL,
+	LT_BOOLEAN,
 	LT_STRING,
 };
-struct lisp_val;
+
+// GARBAGE COLLECTION
+
+#define gc_increfs(obj) do { \
+	assert((obj) != NULL); \
+	assert((obj)->refcount != 0); \
+	++(obj)->refcount; \
+} while (0)
+#define gc_decrefs(obj, type) do { \
+	assert((obj) != NULL); \
+	assert((obj)->refcount != 0); \
+	--(obj)->refcount; \
+	if ((obj)->refcount == 0) { \
+		type ## _destroy(obj); \
+	} \
+} while (0)
+
+// COMPARISON
+
+enum cmp_result {
+	CMP_LT = -1,
+	CMP_EQ = 0,
+	CMP_GT = 1,
+};
+
+// the c types for each lisp type (declaration)
+
+struct value;
+void gc_increfs_value(struct value this);
+void gc_decrefs_value(struct value this);
+void value_destroy(struct value this);
+struct value value_copy(struct value this);
+enum cmp_result value_cmp(struct value lhs, struct value rhs);
+
+typedef struct value lisp_value_t;
+
+enum cmp_result i64_cmp(i64 lhs, i64 rhs);
+
+typedef i64 lisp_num_t;
+
+
+struct builtin;
+typedef struct builtin *builtin_t;
+enum cmp_result builtin_cmp(const builtin_t lhs, const builtin_t rhs);
+
+typedef builtin_t lisp_builtin_t;
+
+
+struct symbol;
+typedef struct symbol *symbol_t;
+void symbol_destroy(symbol_t this);
+enum cmp_result symbol_cmp(const symbol_t lhs, const symbol_t rhs);
+
+typedef symbol_t lisp_sym_t;
+
+
 struct list;
 typedef struct list *list_t;
+void list_destroy(list_t this);
+enum cmp_result list_cmp(const list_t lhs, const list_t rhs);
+
+typedef list_t lisp_list_t;
+
+
+enum cmp_result boolean_cmp(bool lhs, bool rhs);
+
+typedef bool lisp_boolean_t;
+
+
 struct string;
 typedef struct string *string_t;
-struct sym;
-typedef struct sym *sym_t;
+void string_destroy(string_t this);
+enum cmp_result string_cmp(const string_t lhs, const string_t rhs);
+
+typedef string_t lisp_string_t;
+
+/* SECTION: LISP TYPES AND VALUES (DEFINITION) */
+
+// LISP VALUES
+
+struct value {
+	enum lisp_type type;
+	union {
+		lisp_num_t num;
+		lisp_builtin_t builtin;
+		lisp_sym_t sym;
+		lisp_list_t list;
+		lisp_boolean_t boolean;
+		lisp_string_t string;
+	} as;
+};
+
+void value_destroy(struct value this) {
+	switch (this.type) {
+		case LT_SYM: {
+			symbol_destroy(this.as.sym);
+		} break;
+		case LT_LIST: {
+			list_destroy(this.as.list);
+		} break;
+		case LT_STRING: {
+			string_destroy(this.as.string);
+		} break;
+		default: break;
+	}
+}
+struct value value_copy(struct value this) {
+	gc_increfs_value(this);
+	return this;
+}
+
+// init
+// WARNING: NO INCREASING OF REFCOUNTS ARE DONE IN THESE INITIALISERS!
+#define define_value_init_of(type_name, type_enum) \
+struct value value_as_ ## type_name(lisp_ ## type_name ## _t type_name) { \
+	return (struct value) { \
+		.type = type_enum, \
+		.as.type_name = type_name, \
+	}; \
+}
+define_value_init_of(num, LT_NUM)
+define_value_init_of(builtin, LT_BUILTIN)
+define_value_init_of(sym, LT_SYM)
+define_value_init_of(list, LT_LIST)
+define_value_init_of(boolean, LT_BOOLEAN)
+define_value_init_of(string, LT_STRING)
+
+// NUMBERS
+
+// required functions
+enum cmp_result i64_cmp(i64 lhs, i64 rhs) {
+	return lhs < rhs ? CMP_LT : lhs > rhs ? CMP_GT : CMP_EQ;
+}
+
+// BUILTINS
 
 struct call_res;
-typedef struct call_res (*lfn)(list_t args);
-enum builtin_type {
-	BT_FN,
-	BT_MACRO,
-	BT_TRANSFORM,
-};
-struct lbuiltin {
-	lfn fn;
-	bool eval_args;
-	sym_t name;
-	const char *doc;
-};
-struct call_res lb_call(struct lbuiltin fn, list_t args, bool pre_evald);
-struct call_res ll_call(list_t fn, list_t args, bool tailcall, bool pre_evald);
+typedef struct call_res (*builtin_function)(lisp_list_t args);
 
-struct sym {
+struct builtin {
+	builtin_function fn;
+	// should arguments be evaluated before being passed to the function?
+	bool eval_args;
+	symbol_t name;
+	const char *doc; // TODO: switch to string_t?
+};
+
+// required functions
+enum cmp_result builtin_cmp(const builtin_t lhs, const builtin_t rhs) {
+	assert(false && "TODO");
+}
+
+struct _builtin_call_opts {
+	bool inhibit_argument_evaluation;
+};
+struct call_res _builtin_call(
+	const struct builtin *this,
+	const lisp_list_t *args,
+	struct _builtin_call_opts opts
+);
+#define builtin_call(this, args, ...) _builtin_call( \
+	&(this), \
+	&(args), \
+	(struct _builtin_call_opts) { \
+		.inhibit_argument_evaluation = false, \
+		__VA_ARGS__ \
+	} \
+)
+
+// SYMBOLS
+
+struct symbol {
 	const char *sym;
+
 	size_t refcount;
 };
-sym_t sym_from_strn(const char *str, size_t len) {
+
+// required functions
+void symbol_destroy(symbol_t this) {
+	assert(this != NULL);
+
+	free((void*)this->sym);
+	free(this);
+}
+enum cmp_result symbol_cmp(const symbol_t lhs, const symbol_t rhs) {
+	if (lhs == rhs) return CMP_EQ;
+	const int cmpres = strcmp(lhs->sym, rhs->sym);
+	return cmpres < 0 ? CMP_LT : cmpres > 0 ? CMP_GT : CMP_EQ;
+}
+
+// init
+symbol_t symbol_from_strn(const char *str, size_t n) {
 	assert(str != NULL);
 
-	sym_t res = malloc(sizeof(struct sym));
-	*res = (struct sym) {
-		.sym = strndup(str, len),
+	symbol_t res = malloc(sizeof(*res));
+	*res = (struct symbol) {
+		.sym = strndup(str, n),
 		.refcount = 1,
 	};
 	return res;
 }
-sym_t sym_from_str(const char *str) {
-	return sym_from_strn(str, strlen(str));
+symbol_t symbol_from_str(const char *str) {
+	return symbol_from_strn(str, strlen(str));
 }
-sym_t sym_copy(sym_t sym) {
-	assert(sym != NULL);
-	assert(sym->refcount != 0);
 
-	++sym->refcount;
-	return sym;
-}
-void sym_free(sym_t sym) {
-	assert(sym != NULL);
-	if (sym->refcount == 0) {
-		fprintf(stderr, "error: re-freeing `%s`!\n", sym->sym);
-	}
-	assert(sym->refcount != 0);
+// LISTS
 
-	--sym->refcount;
-	if (!sym->refcount) {
-		free((void*)sym->sym);
-		free(sym);
-	}
+struct list {
+	struct value val;
+	list_t next;
+
+	size_t refcount;
+};
+
+// required functions
+void list_destroy(list_t this) {
+	gc_decrefs(this->next, list);
+	gc_decrefs_value(this->val);
+	free(this);
 }
+enum cmp_result list_cmp(const list_t lhs, const list_t rhs) {
+	assert(false && "TODO");
+}
+
+// init
+//...
+
+struct _list_call_opts {
+	bool is_tail_call;
+	bool inhibit_argument_evaluation;
+};
+struct call_res _list_call(
+	const struct list *this,
+	const lisp_list_t *args,
+	struct _list_call_opts opts
+);
+#define list_call(this, args, ...) _builtin_call( \
+	&(this), \
+	&(args), \
+	(struct _list_call_opts) { \
+		.is_tail_call = false, \
+		.inhibit_argument_evaluation = false, \
+		__VA_ARGS__ \
+	} \
+)
+
+// BOOLEANS
+
+// required functions
+enum cmp_result bool_cmp(bool lhs, bool rhs) {
+	return lhs < rhs ? CMP_LT : lhs > rhs ? CMP_GT : CMP_EQ;
+}
+
+// STRINGS
 
 struct string {
 	char *data;
@@ -180,10 +378,22 @@ struct string {
 	string_t borrows;
 	size_t refcount;
 };
+
+// required functions
+void string_destroy(string_t this) {
+	if (this->borrows == NULL) free((void*)this->data);
+	else gc_decrefs(this->borrows, string);
+	free(this);
+}
+enum cmp_result string_cmp(const string_t lhs, const string_t rhs) {
+	assert(false && "TODO");
+}
+
+// init
 string_t string_from_strn(const char *str, size_t len) {
 	assert(str != NULL);
 
-	string_t res = malloc(sizeof(struct string));
+	string_t res = malloc(sizeof(*res));
 	*res = (struct string) {
 		.data = strndup(str, len),
 		.len = len,
@@ -195,53 +405,23 @@ string_t string_from_strn(const char *str, size_t len) {
 string_t string_from_str(const char *str) {
 	return string_from_strn(str, strlen(str));
 }
-string_t string_copy(string_t string) {
-	assert(string != NULL);
-	assert(string->refcount != 0);
-
-	++string->refcount;
-	return string;
-}
-void string_free(string_t string) {
-	assert(string != NULL);
-	if (string->refcount == 0) {
-		fprintf(stderr, "error: re-freeing \"%.*s\"!\n", (int)string->len, string->data);
-	}
-	assert(string->refcount != 0);
-
-	--string->refcount;
-	if (!string->refcount) {
-		if (!string->borrows) free((void*)string->data);
-		else string_free(string->borrows);
-		free(string);
-	}
-}
-string_t string_substr(string_t string, size_t begin, size_t end) {
-	assert(string != NULL);
+string_t string_substr(string_t of, size_t begin, size_t end) {
+	assert(of != NULL);
 	assert(begin <= end);
-	assert(end <= string->len);
+	assert(end <= of->len);
 
-	string_t res = malloc(sizeof(struct string));
+	gc_increfs(of);
+
+	string_t res = malloc(sizeof(*res));
 	*res = (struct string) {
-		.data = &string->data[begin],
+		.data = &of->data[begin],
 		.len = end - begin,
-		.borrows = string_copy(string),
+		.borrows = of,
 		.refcount = 1,
 	};
 	return res;
 }
 
-struct lisp_val {
-	enum lisp_type type;
-	union {
-		i64 num;
-		struct lbuiltin builtin;
-		sym_t sym;
-		list_t list;
-		bool boo;
-		string_t string;
-	} as;
-};
 list_t list_copy(list_t list);
 struct lisp_val lisp_val_copy(struct lisp_val val) {
 	if (val.type == LT_SYM) sym_copy(val.as.sym);
@@ -264,35 +444,7 @@ struct call_res {
 	bool eval;
 };
 
-struct list {
-	struct lisp_val val;
-	list_t next;
-
-	size_t refcount;
-};
-
 void list_print(list_t this, FILE *f);
-list_t list_copy(list_t list) {
-	if (list == NULL) return NULL;
-	assert(list->refcount != 0);
-
-	++list->refcount;
-	return list;
-}
-void list_free(list_t list) {
-	if (list == NULL) return;
-	if (list->refcount == 0) {
-		fprintf(stderr, "error: re-freeing (%p)!\n", list);
-	}
-	assert(list->refcount != 0);
-
-	--list->refcount;
-	if (!list->refcount) {
-		list_free(list->next);
-		lisp_val_free(list->val);
-		free(list);
-	}
-}
 
 const struct lisp_val nil = {
 	.type = LT_LIST,
