@@ -161,9 +161,11 @@ typedef string_t lisp_string_t;
 
 enum cmp_result value_cmp(const lisp_value_t lhs, const lisp_value_t rhs);
 void value_repr(const lisp_value_t this, struct string_builder *sb);
+bool value_is_truthy(const lisp_value_t this);
 #define X(type_name, _) \
 enum cmp_result type_name ## _cmp(const lisp_ ## type_name ## _t lhs, const lisp_ ## type_name ## _t rhs); \
-void type_name ## _repr(const lisp_ ## type_name ## _t this, struct string_builder *sb);
+void type_name ## _repr(const lisp_ ## type_name ## _t this, struct string_builder *sb); \
+bool type_name ## _is_truthy(const lisp_ ## type_name ## _t this);
 LIST_OF_LISP_TYPES
 #undef X
 
@@ -322,6 +324,16 @@ void value_repr(const lisp_value_t this, struct string_builder *sb) {
 
 	assert(false && "unreachable");
 }
+bool value_is_truthy(const lisp_value_t this) {
+	switch (this.type) {
+#define X(type_name, enum_name) \
+		case enum_name: return type_name ## _is_truthy(this.as.type_name);
+		LIST_OF_LISP_TYPES
+#undef X
+	}
+
+	assert(false && "unreachable");
+}
 void value_increfs(lisp_value_t this) {
 	switch (this.type) {
 #define X(type_name, enum_name) \
@@ -397,6 +409,9 @@ void number_repr(const lisp_number_t this, struct string_builder *sb) {
 		sb->items[begin+len-1 - 1] = tmp;
 	}
 }
+bool number_is_truthy(const lisp_number_t this) {
+	return this != 0;
+}
 
 // (CALL RESULT)
 
@@ -435,6 +450,9 @@ void builtin_repr(const lisp_builtin_t this, struct string_builder *sb) {
 		sb_addc(sb, '>');
 	}
 }
+bool builtin_is_truthy(const lisp_builtin_t this) {
+	return true;
+}
 
 // + misc +
 
@@ -463,6 +481,9 @@ enum cmp_result symbol_cmp(const symbol_t lhs, const symbol_t rhs) {
 }
 void symbol_repr(const lisp_symbol_t this, struct string_builder *sb) {
 	sb_adds(sb, this->sym);
+}
+bool symbol_is_truthy(const lisp_symbol_t this) {
+	return true;
 }
 def_trivial_increfs(symbol)
 def_trivial_decrefs(symbol)
@@ -524,6 +545,9 @@ void list_repr(const lisp_list_t this, struct string_builder *sb) {
 	}
 
 	sb_addc(sb, ')');
+}
+bool list_is_truthy(const lisp_list_t this) {
+	return this != NULL;
 }
 void list_increfs(lisp_list_t this) {
 	assert(this != NULL);
@@ -645,6 +669,9 @@ enum cmp_result boolean_cmp(const lisp_boolean_t lhs, const lisp_boolean_t rhs) 
 void boolean_repr(const lisp_boolean_t this, struct string_builder *sb) {
 	sb_addc(sb, this ? 'T' : 'F');
 }
+bool boolean_is_truthy(const lisp_boolean_t this) {
+	return this;
+}
 
 // STRINGS
 
@@ -687,6 +714,9 @@ void string_repr(const lisp_string_t this, struct string_builder *sb) {
 	escaped:;
 	}
 	sb_addc(sb, '"');
+}
+bool string_is_truthy(const lisp_string_t this) {
+	return this->len != 0;
 }
 def_trivial_increfs(string)
 def_trivial_decrefs(string)
@@ -828,26 +858,6 @@ void env_free(struct env *env) {
 }
 
 /* SECTION: REFACTOR PENDING */
-
-bool lisp_val_is_truthy(struct lisp_val this) {
-	switch (this.type) {
-		case LT_NUM: {
-			return this.as.num != 0;
-		} break;
-		case LT_LIST: {
-			return this.as.list != NULL;
-		} break;
-		case LT_BOOL: {
-			return this.as.boo;
-		} break;
-		case LT_STRING: {
-			return this.as.string->len != 0;
-		} break;
-		default: return true;
-	}
-
-	assert(false && "unreachable");
-}
 
 #define advance() do { ++*str; --*str_len; } while (0)
 
