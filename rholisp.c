@@ -321,8 +321,6 @@ void value_repr(const lisp_value_t this, struct string_builder *sb) {
 		LIST_OF_LISP_TYPES
 #undef X
 	}
-
-	assert(false && "unreachable");
 }
 bool value_is_truthy(const lisp_value_t this) {
 	switch (this.type) {
@@ -437,6 +435,8 @@ struct builtin {
 // + required functions +
 
 enum cmp_result builtin_cmp(const lisp_builtin_t lhs, const lisp_builtin_t rhs) {
+	(void) lhs;
+	(void) rhs;
 	assert(false && "TODO");
 }
 void builtin_repr(const lisp_builtin_t this, struct string_builder *sb) {
@@ -451,6 +451,7 @@ void builtin_repr(const lisp_builtin_t this, struct string_builder *sb) {
 	}
 }
 bool builtin_is_truthy(const lisp_builtin_t this) {
+	(void) this;
 	return true;
 }
 
@@ -477,6 +478,7 @@ void symbol_repr(const lisp_symbol_t this, struct string_builder *sb) {
 	sb_adds(sb, this->sym);
 }
 bool symbol_is_truthy(const lisp_symbol_t this) {
+	(void) this;
 	return true;
 }
 def_trivial_increfs(symbol)
@@ -526,6 +528,8 @@ const struct value nil = {
 // + required functions +
 
 enum cmp_result list_cmp(const lisp_list_t lhs, const lisp_list_t rhs) {
+	(void) lhs;
+	(void) rhs;
 	assert(false && "TODO");
 }
 void list_repr(const lisp_list_t this, struct string_builder *sb) {
@@ -544,19 +548,21 @@ bool list_is_truthy(const lisp_list_t this) {
 	return this != NULL;
 }
 void list_increfs(lisp_list_t this) {
-	assert(this != NULL);
+	if (this == NULL) return;
 	assert(this->refcount != 0);
 	++this->refcount;
 	assert(this->info->net_refcount != 0);
 	++this->info->net_refcount;
 }
 void list_decrefs(lisp_list_t this) {
-	assert(this != NULL);
+	if (this == NULL) return;
 	assert(this->refcount != 0);
 	--this->refcount;
 	assert(this->info->net_refcount != 0);
 	--this->info->net_refcount;
 	if (this->refcount == 0) {
+		// I think this is what I have to do??
+		if (this->next != NULL) ++this->info->net_refcount;
 		list_destroy(this);
 	}
 }
@@ -622,9 +628,9 @@ list_t list_append(list_t this, lisp_value_t val) {
 	if (this == NULL) {
 		return list_cons(val, NULL);
 	}
-	assert(this->info->net_refcount == 0);
+	assert(this->info->net_refcount == 1);
 
-	list_t new_last = malloc(sizeof(new_last));
+	list_t new_last = malloc(sizeof(*new_last));
 	*new_last = (struct list) {
 		.val = value_copy(val),
 		.next = NULL,
@@ -638,7 +644,7 @@ list_t list_append(list_t this, lisp_value_t val) {
 }
 list_t list_reverse(list_t this) {
 	if (this == NULL) return NULL;
-	assert(this->info->net_refcount == 0);
+	assert(this->info->net_refcount == 1);
 
 	assert(false && "TODO");
 }
@@ -686,6 +692,8 @@ struct string {
 // + required functions +
 
 enum cmp_result string_cmp(const lisp_string_t lhs, const lisp_string_t rhs) {
+	(void) lhs;
+	(void) rhs;
 	assert(false && "TODO");
 }
 void string_repr(const lisp_string_t this, struct string_builder *sb) {
@@ -994,7 +1002,7 @@ struct call_res _list_call(
 			curr_arg = curr_arg->next;
 		}
 
-		if (args != NULL) {
+		if (curr_arg != NULL) {
 			fputs("too many arguments provided!\n", stderr);
 		}
 
@@ -1052,7 +1060,7 @@ struct call_res _list_call(
 			curr_arg = curr_arg->next;
 		}
 
-		if (args != NULL) {
+		if (curr_arg != NULL) {
 			fputs("too many arguments provided!\n", stderr);
 		}
 
@@ -1772,8 +1780,6 @@ struct call_res lsubstr_s(list_t args) {
 struct call_res lrefs(list_t args) {
 	assert(args != NULL);
 	assert(args->next == NULL);
-
-	lisp_value_t res = value_of_number(0);
 
 	switch (args->val.type) {
 #define X(type_name, enum_type) \
