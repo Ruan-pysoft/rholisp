@@ -1337,10 +1337,40 @@ struct call_res lappend(list_t args) {
 	assert(args->val.type == LT_LIST);
 	assert(args->next->next == NULL);
 
+	//fprintf(stderr, "Appending to list with %lu refs\n", args->val.as.list->info->net_refcount);
 	return call_res_from(value_of_list(list_append(
 		list_dup(args->val.as.list),
 		args->next->val
 	)));
+}
+struct call_res lappend_to(list_t args) {
+	assert(args != NULL);
+	assert(args->val.type == LT_SYMBOL);
+	assert(args->next != NULL);
+	assert(args->next->next == NULL);
+
+	struct assoc *assoc = find_var(curr_env, args->val.as.symbol);
+	assert(assoc != NULL);
+	assert(assoc->value.type == LT_LIST);
+
+	//fprintf(stderr, "In-place append to list with %lu refs\n", assoc->value.as.list->info->net_refcount);
+
+	lisp_value_t tmp = eval(args->next->val);
+	if (assoc->value.as.list->info->net_refcount == 1) {
+		//fprintf(stderr, "Modifying list in-place...\n");
+		list_append(assoc->value.as.list, tmp);
+	} else {
+		//fprintf(stderr, "Duplicating list...\n");
+		lisp_value_t old_value = assoc->value;
+		assoc->value = value_of_list(list_append(
+			list_dup(old_value.as.list),
+			tmp
+		));
+		value_decrefs(old_value);
+	}
+	value_decrefs(tmp);
+
+	return call_res_from(value_copy(assoc->value));
 }
 struct call_res lquote(list_t args) {
 	assert(args != NULL);
@@ -2694,6 +2724,10 @@ struct {
 	} },
 	{ "append", { lappend, true, NULL,
 		"  list val -> appends `val` to `list`"
+	} },
+	{ "append-to", { lappend_to, false, NULL,
+		"  name val -> appends `val` to the list associated with the symbol `name`\n"
+		"  NOTE: if the association is the only reference to the list value, append-to mutates the underlying value, rather than constructing a new list, yielding performance improvements"
 	} },
 	{ "quote", { lquote, false, NULL,
 		"  val -> returns the value as-is\n"

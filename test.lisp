@@ -1,3 +1,19 @@
+(def l '(1 2 3))
+(append l 4)
+(def args '((1 2 3) 4))
+(call append args)
+(def args2 args)
+(call append args2)
+
+(append-to l 4)
+(println l)
+(def l2 l)
+(append-to l 5)
+(println l)
+(println l2)
+
+(exit)
+
 (pstr "Hello, world!\n")
 
 (def \* '((params body) T '(params T body)))

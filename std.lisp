@@ -299,7 +299,7 @@
         )
         default (\* (then) (list then))
       )
-      (call or (append ' branches nil))
+      (or (call or branches) nil)
     )
   )
 )
