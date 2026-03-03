@@ -456,13 +456,7 @@ bool builtin_is_truthy(const lisp_builtin_t this) {
 
 // + misc +
 
-struct call_res _builtin_call(
-	const struct builtin *this,
-	const lisp_list_t args,
-	struct _builtin_call_opts opts
-) {
-	assert(false && "TODO");
-}
+// NOTE: _builtin_call defined below
 
 // SYMBOLS
 
@@ -651,13 +645,7 @@ list_t list_reverse(list_t this) {
 
 // + misc +
 
-struct call_res _list_call(
-	const list_t this,
-	const lisp_list_t args,
-	struct _list_call_opts opts
-) {
-	assert(false && "TODO");
-}
+// NOTE: _list_call defined below
 
 // BOOLEANS
 
@@ -855,6 +843,233 @@ void env_free(struct env *env) {
 	env_clear(env);
 	*env = (struct env) {0};
 	free(env);
+}
+
+/* SECTION: TODO REWRITE */
+
+struct list_fn {
+	list_t params;
+	bool is_macro;
+	symbol_t name;
+	string_t doc;
+	lisp_value_t body;
+};
+struct list_fn list_fn_copy(struct list_fn this) {
+	list_copy(this.params);
+	if (this.name != NULL) symbol_increfs(this.name);
+	if (this.doc != NULL) string_increfs(this.doc);
+	value_increfs(this.body);
+
+	return this;
+}
+void list_fn_free(struct list_fn this) {
+	list_decrefs(this.params);
+	if (this.name != NULL) symbol_decrefs(this.name);
+	if (this.doc != NULL) string_decrefs(this.doc);
+	value_decrefs(this.body);
+}
+bool list_is_fn(list_t list) {
+	if (list == NULL) return false;
+	if (list->val.type != LT_LIST) return false;
+
+	list_t params = list->val.as.list;
+	while (params != NULL) {
+		if (params->val.type == LT_SYMBOL) {
+			params = params->next;
+			continue;
+		}
+
+		if (params->val.type != LT_LIST) return false;
+		if (params->next == NULL) return false;
+		if (params->next->val.type != LT_SYMBOL) return false;
+		if (params->next->next != NULL) return false;
+		break;
+	}
+
+	if (list->next == NULL) return false;
+	if (list->next->val.type == LT_LIST) {
+		if (list->next->next == NULL) return false;
+		if (list->next->next->val.type != LT_BOOLEAN) return false;
+		if (list->next->next->next == NULL) return false;
+		if (list->next->next->next->next != NULL) return false;
+
+		list_t meta = list->next->val.as.list;
+
+		if (meta == NULL) return false;
+		if (meta->val.type != LT_SYMBOL) return false;
+		if (meta->next == NULL) return false;
+		if (meta->next->val.type != LT_STRING) return false;
+		if (meta->next->next != NULL) return false;
+
+		return true;
+	} else if (list->next->val.type == LT_BOOLEAN) {
+		if (list->next->next == NULL) return false;
+		if (list->next->next->next != NULL) return false;
+		return true;
+	} else return false;
+}
+struct list_fn list_to_fn(list_t list) {
+	assert(list != NULL);
+
+	assert(list_is_fn(list));
+
+	struct list_fn res;
+
+	if (list->next->val.type == LT_LIST) res = (struct list_fn) {
+		.params = list_copy(list->val.as.list),
+		.name = symbol_copy(list->next->val.as.list->val.as.symbol),
+		.doc = string_copy(list->next->val.as.list->next->val.as.string),
+		.is_macro = list->next->next->val.as.boolean,
+		.body = value_copy(list->next->next->next->val),
+	}; else res = (struct list_fn) {
+		.params = list_copy(list->val.as.list),
+		.name = NULL,
+		.doc = NULL,
+		.is_macro = list->next->val.as.boolean,
+		.body = value_copy(list->next->next->val),
+	};
+
+	return res;
+}
+
+/* SECTION: FUNCTION CALLING */
+
+lisp_value_t eval(lisp_value_t val);
+struct call_res _builtin_call(
+	const builtin_t this,
+	const lisp_list_t args,
+	struct _builtin_call_opts opts
+) {
+	if (this->eval_args && !opts.inhibit_argument_evaluation) {
+		list_t processed_args = NULL;
+		list_t curr = args;
+		while (curr != NULL) {
+			lisp_value_t tmp = eval(curr->val);
+			processed_args = list_append(processed_args, tmp);
+			value_decrefs(tmp);
+			curr = curr->next;
+		}
+
+		struct call_res res = this->fn(processed_args);
+		list_decrefs(processed_args);
+		return res;
+	} else {
+		return this->fn(args);
+	}
+}
+extern struct env *curr_env;
+lisp_value_t substitute(lisp_value_t into, struct env *from);
+struct call_res _list_call(
+	const list_t this,
+	const lisp_list_t args,
+	struct _list_call_opts opts
+) {
+	assert(list_is_fn(this));
+
+	struct list_fn lfn = list_to_fn(this);
+	list_t params = lfn.params;
+
+	if (lfn.is_macro) {
+		struct env env = {0};
+
+		list_t curr_arg = args;
+		while (params != NULL) {
+			if (params->val.type == LT_LIST) {
+				env_def(&env, params->next->val.as.symbol, value_of_list(curr_arg));
+
+				curr_arg = NULL;
+				break;
+			}
+
+			assert(params->val.type == LT_SYMBOL);
+
+			if (args == NULL) {
+				fputs("not enough arguments provided!\n", stderr);
+				break;
+			}
+
+			env_def(&env, params->val.as.symbol, curr_arg->val);
+
+			params = params->next;
+			curr_arg = curr_arg->next;
+		}
+
+		if (args != NULL) {
+			fputs("too many arguments provided!\n", stderr);
+		}
+
+		lisp_value_t body = substitute(lfn.body, &env);
+
+		env_clear(&env);
+		list_fn_free(lfn);
+
+		return call_res_from(body, .eval = true);
+	} else {
+		const bool replace_env = opts.is_tail_call && curr_env->params_of == this;
+
+		struct env *env = malloc(sizeof(*env));
+		*env = (struct env) {0};
+		env->parent = curr_env;
+		env->fixed = true;
+		env->params_of = list_copy(this);
+
+		list_t curr_arg = args;
+		while (params != NULL) {
+			if (params->val.type == LT_LIST) {
+				list_t val = NULL;
+
+				while (curr_arg) {
+					lisp_value_t tmp = opts.inhibit_argument_evaluation
+						? value_copy(curr_arg->val)
+						: eval(curr_arg->val);
+					val = list_append(val, tmp);
+					value_decrefs(tmp);
+
+					curr_arg = curr_arg->next;
+				}
+				env_def(env, params->next->val.as.symbol, value_of_list(val));
+
+				list_decrefs(val);
+
+				curr_arg = NULL;
+				break;
+			}
+
+			assert(params->val.type == LT_SYMBOL);
+
+			if (args == NULL) {
+				fputs("not enough arguments provided!\n", stderr);
+				break;
+			}
+
+			lisp_value_t tmp = opts.inhibit_argument_evaluation
+				? value_copy(curr_arg->val)
+				: eval(curr_arg->val);
+			env_def(env, params->val.as.symbol, tmp);
+			value_decrefs(tmp);
+
+			params = params->next;
+			curr_arg = curr_arg->next;
+		}
+
+		if (args != NULL) {
+			fputs("too many arguments provided!\n", stderr);
+		}
+
+		if (replace_env) {
+			assert(env->count == curr_env->count);
+			env->parent = curr_env->parent;
+			env_free(curr_env);
+			curr_env = env;
+		} else {
+			curr_env = env;
+		}
+
+		lisp_value_t body = value_copy(lfn.body);
+		list_fn_free(lfn);
+
+		return call_res_from(body, .eval=true, .destroy_env=!replace_env);
+	}
 }
 
 /* SECTION: CONSTANTS */
@@ -1237,91 +1452,6 @@ struct call_res ldo(list_t args) {
 	return call_res_from(value_copy(args->val), .eval = true);
 }
 
-struct list_fn {
-	list_t params;
-	bool is_macro;
-	symbol_t name;
-	string_t doc;
-	lisp_value_t body;
-};
-struct list_fn list_fn_copy(struct list_fn this) {
-	list_copy(this.params);
-	if (this.name != NULL) symbol_increfs(this.name);
-	if (this.doc != NULL) string_increfs(this.doc);
-	value_increfs(this.body);
-
-	return this;
-}
-void list_fn_free(struct list_fn this) {
-	list_decrefs(this.params);
-	if (this.name != NULL) symbol_decrefs(this.name);
-	if (this.doc != NULL) string_decrefs(this.doc);
-	value_decrefs(this.body);
-}
-bool list_is_fn(list_t list) {
-	if (list == NULL) return false;
-	if (list->val.type != LT_LIST) return false;
-
-	list_t params = list->val.as.list;
-	while (params != NULL) {
-		if (params->val.type == LT_SYMBOL) {
-			params = params->next;
-			continue;
-		}
-
-		if (params->val.type != LT_LIST) return false;
-		if (params->next == NULL) return false;
-		if (params->next->val.type != LT_SYMBOL) return false;
-		if (params->next->next != NULL) return false;
-		break;
-	}
-
-	if (list->next == NULL) return false;
-	if (list->next->val.type == LT_LIST) {
-		if (list->next->next == NULL) return false;
-		if (list->next->next->val.type != LT_BOOLEAN) return false;
-		if (list->next->next->next == NULL) return false;
-		if (list->next->next->next->next != NULL) return false;
-
-		list_t meta = list->next->val.as.list;
-
-		if (meta == NULL) return false;
-		if (meta->val.type != LT_SYMBOL) return false;
-		if (meta->next == NULL) return false;
-		if (meta->next->val.type != LT_STRING) return false;
-		if (meta->next->next != NULL) return false;
-
-		return true;
-	} else if (list->next->val.type == LT_BOOLEAN) {
-		if (list->next->next == NULL) return false;
-		if (list->next->next->next != NULL) return false;
-		return true;
-	} else return false;
-}
-struct list_fn list_to_fn(list_t list) {
-	assert(list != NULL);
-
-	assert(list_is_fn(list));
-
-	struct list_fn res;
-
-	if (list->next->val.type == LT_LIST) res = (struct list_fn) {
-		.params = list_copy(list->val.as.list),
-		.name = symbol_copy(list->next->val.as.list->val.as.symbol),
-		.doc = string_copy(list->next->val.as.list->next->val.as.string),
-		.is_macro = list->next->next->val.as.boolean,
-		.body = value_copy(list->next->next->next->val),
-	}; else res = (struct list_fn) {
-		.params = list_copy(list->val.as.list),
-		.name = NULL,
-		.doc = NULL,
-		.is_macro = list->next->val.as.boolean,
-		.body = value_copy(list->next->next->val),
-	};
-
-	return res;
-}
-
 struct call_res lcall(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_BUILTIN || args->val.type == LT_LIST);
@@ -1629,8 +1759,8 @@ struct call_res lsubstr_s(list_t args) {
 		return call_res_from(value_of_number(args->val.as.string->data[args->next->val.as.number]));
 	} else {
 		string_t s = args->val.as.string;
-		const i64 begin = args->next->val.as.num;
-		const i64 end = args->next->next->val.as.num;
+		const i64 begin = args->next->val.as.number;
+		const i64 end = args->next->next->val.as.number;
 
 		assert(begin <= end);
 		assert(0 <= begin);
@@ -2415,7 +2545,7 @@ struct call_res lffi_call(list_t args) {
 	assert(args->val.as.list->next->next == NULL);
 	assert(args->next != NULL);
 
-	void *func = *(void**)&args->val.as.list->next->val.as.numbol;
+	void *func = *(void**)&args->val.as.list->next->val.as.number;
 
 	ffi_cif cif;
 	struct {
@@ -2525,7 +2655,7 @@ struct call_res ldestruct_val(list_t args) {
 	size_t read_size = 0;
 	lisp_value_t val = destruct_cval_from(
 		type,
-		*(void**)&args->val.as.list->next->val.as.num,
+		*(void**)&args->val.as.list->next->val.as.number,
 		&read_size
 	);
 	lisp_value_t val_size = value_of_number(*(i64*)&read_size);
@@ -2794,31 +2924,32 @@ recurse:
 
 			lisp_value_t fn = eval(val.as.list->val);
 			if (fn.type != LT_BUILTIN && fn.type != LT_LIST) {
-				fputs("error: tried calling value ", stderr);
-				lisp_val_print(fn, stderr);
-				fputs(" as function\n", stderr);
+				struct string_builder sb = {0};
+				value_repr(fn, &sb);
+				fprintf(stderr, "error: tried calling value %.*s as function\n", (int)sb.count, sb.items);
+				sb_clear(&sb);
 				destroy_envs(envs);
-				lisp_val_free(val);
-				lisp_val_free(fn);
-				return lisp_val_copy(nil);
+				value_decrefs(val);
+				value_decrefs(fn);
+				return nil;
 			}
 
 			struct call_res res;
 			if (fn.type == LT_BUILTIN) {
-				 res = lb_call(fn.as.builtin, val.as.list->next, false);
+				res = builtin_call(fn.as.builtin, val.as.list->next);
 			} else {
-				res = ll_call(fn.as.list, val.as.list->next, tailcall, false);
+				res = list_call(fn.as.list, val.as.list->next, .is_tail_call=tailcall);
 			}
-			lisp_val_free(val);
-			lisp_val_free(fn);
+			value_decrefs(val);
+			value_decrefs(fn);
 			if (!res.eval) {
 				assert(!res.destroy_env);
 				destroy_envs(envs);
-				return res.val;
+				return res.result;
 			}
 
 			if (res.destroy_env) ++envs;
-			val = res.val;
+			val = res.result;
 			tailcall = true;
 			goto recurse;
 		} break;
@@ -2829,171 +2960,28 @@ recurse:
 
 	assert(false && "unreachable");
 }
-struct call_res lb_call(struct lbuiltin fn, list_t args, bool pre_evald) {
-	if (fn.eval_args) {
-		list_t processed_args = NULL;
-		while (args != NULL) {
-			struct lisp_val tmp = pre_evald
-				? lisp_val_copy(args->val)
-				: eval(args->val);
-			processed_args = list_append(processed_args, tmp);
-			lisp_val_free(tmp);
-			args = args->next;
-		}
-
-		struct call_res res = fn.fn(processed_args);
-		list_free(processed_args);
-		return res;
-	} else {
-		return fn.fn(args);
-	}
-}
-struct lisp_val substitute(struct lisp_val into, struct env *from) {
+lisp_value_t substitute(lisp_value_t into, struct env *from) {
 	switch (into.type) {
-		case LT_SYM: {
-			struct assoc *found = find_var(from, into.as.sym);
-			if (found == NULL) return lisp_val_copy(into);
-			else return lisp_val_copy(found->value);
+		case LT_SYMBOL: {
+			struct assoc *found = find_var(from, into.as.symbol);
+			if (found == NULL) return value_copy(into);
+			else return value_copy(found->value);
 		} break;
 		case LT_LIST: {
 			list_t lst = into.as.list;
 			list_t res = NULL;
 
 			while (lst != NULL) {
-				struct lisp_val tmp = substitute(lst->val, from);
+				lisp_value_t tmp = substitute(lst->val, from);
 				res = list_append(res, tmp);
-				lisp_val_free(tmp);
+				value_decrefs(tmp);
 
 				lst = lst->next;
 			}
 
-			return (struct lisp_val) {
-				.type = LT_LIST,
-				.as.list = res,
-			};
+			return value_of_list(res);
 		} break;
-		default: return lisp_val_copy(into);
-	}
-}
-struct call_res ll_call(list_t fn, list_t args, bool tailcall, bool pre_evald) {
-	assert(list_is_fn(fn));
-
-	struct list_fn lfn = list_to_fn(fn);
-	list_t params = lfn.params;
-
-	if (lfn.is_macro) {
-		struct env env = {0};
-
-		while (params != NULL) {
-			if (params->val.type == LT_LIST) {
-				env_def(&env, params->next->val.as.sym, (struct lisp_val) {
-					.type = LT_LIST,
-					.as.list = args,
-				});
-
-				args = NULL;
-				break;
-			}
-
-			assert(params->val.type == LT_SYM);
-
-			if (args == NULL) {
-				fputs("not enough arguments provided!\n", stderr);
-				break;
-			}
-
-			env_def(&env, params->val.as.sym, args->val);
-
-			params = params->next;
-			args = args->next;
-		}
-
-		if (args != NULL) {
-			fputs("too many arguments provided!\n", stderr);
-		}
-
-		struct lisp_val body = substitute(lfn.body, &env);
-
-		env_clear(&env);
-		list_fn_free(lfn);
-
-		return (struct call_res) {
-			.val = body,
-			.eval = true,
-			.destroy_env = false,
-		};
-	} else {
-		bool replace_env = tailcall && curr_env->params_of == fn;
-
-		struct env *env = malloc(sizeof(struct env));
-		*env = (struct env) {0};
-		env->parent = curr_env;
-		env->fixed = true;
-		env->params_of = list_copy(fn);
-
-		while (params != NULL) {
-			if (params->val.type == LT_LIST) {
-				list_t val = NULL;
-
-				while (args) {
-					struct lisp_val tmp = pre_evald
-						? lisp_val_copy(args->val)
-						: eval(args->val);
-					val = list_append(val, tmp);
-					lisp_val_free(tmp);
-
-					args = args->next;
-				}
-
-				env_def(env, params->next->val.as.sym, (struct lisp_val) {
-					.type = LT_LIST,
-					.as.list = val,
-				});
-
-				list_free(val);
-
-				args = NULL;
-				break;
-			}
-
-			assert(params->val.type == LT_SYM);
-
-			if (args == NULL) {
-				fputs("not enough arguments provided!\n", stderr);
-				break;
-			}
-
-			struct lisp_val tmp = pre_evald
-				? lisp_val_copy(args->val)
-				: eval(args->val);
-			env_def(env, params->val.as.sym, tmp);
-			lisp_val_free(tmp);
-
-			params = params->next;
-			args = args->next;
-		}
-
-		if (args != NULL) {
-			fputs("too many arguments provided!\n", stderr);
-		}
-
-		if (replace_env) {
-			assert(env->count == curr_env->count);
-			env->parent = curr_env->parent;
-			env_free(curr_env);
-			curr_env = env;
-		} else {
-			curr_env = env;
-		}
-
-		struct lisp_val body = lisp_val_copy(lfn.body);
-		list_fn_free(lfn);
-
-		return (struct call_res) {
-			.val = body,
-			.eval = true,
-			.destroy_env = !replace_env,
-		};
+		default: return value_copy(into);
 	}
 }
 
@@ -3032,10 +3020,10 @@ void run_file(const char *fname) {
 	for (;;) {
 		skip_ws(&begin, &len);
 		if (!len) goto finish;
-		struct lisp_val parsed = lisp_val_parse(&begin, &len);
-		struct lisp_val evald = eval(parsed);
-		lisp_val_free(parsed);
-		lisp_val_free(last_res);
+		lisp_value_t parsed = lisp_val_parse(&begin, &len);
+		lisp_value_t evald = eval(parsed);
+		value_decrefs(parsed);
+		value_decrefs(last_res);
 		last_res = evald;
 	}
 
@@ -3055,15 +3043,17 @@ void run_repl(void) {
 		line_len = line_builder.count;
 
 		// cast &line to (void*) to side-step incorrect constness warnings from the compiler
-		struct lisp_val parsed = lisp_val_parse((void*)&line, &line_len);
-		struct lisp_val evald = eval(parsed);
+		lisp_value_t parsed = lisp_val_parse((void*)&line, &line_len);
+		lisp_value_t evald = eval(parsed);
 
-		lisp_val_free(parsed);
-		lisp_val_free(last_res);
+		value_decrefs(parsed);
+		value_decrefs(last_res);
 
 		last_res = evald;
-		lisp_val_print(last_res, stdout);
-		putchar('\n');
+		struct string_builder sb = {0};
+		value_repr(last_res, &sb);
+		printf("%.*s\n", (int)sb.count, sb.items);
+		sb_clear(&sb);
 	}
 }
 
@@ -3092,28 +3082,28 @@ int main(int argc, char **argv) {
 #undef X
 
 	for (size_t i = 0; i < sizeof(BUILTINS)/sizeof(*BUILTINS); ++i) {
-		BUILTINS[i].fn.name = sym_from_str(BUILTINS[i].name);
+		BUILTINS[i].fn.name = symbol_from_str(BUILTINS[i].name);
 	}
 
-	last_res = lisp_val_copy(nil);
+	last_res = nil;
 
-	env_add(&root_env, (struct assoc) {
-		.name = sym_from_str("nil"),
+	da_append(&root_env, ((struct assoc) {
+		.name = symbol_from_str("nil"),
 		.value = nil,
-	});
+	}));
 
-	env_add(&root_env, (struct assoc) {
-		.name = sym_from_str("stdin"),
+	da_append(&root_env, ((struct assoc) {
+		.name = symbol_from_str("stdin"),
 		.value = file_to_lisp_val(stdin),
-	});
-	env_add(&root_env, (struct assoc) {
-		.name = sym_from_str("stdout"),
+	}));
+	da_append(&root_env, ((struct assoc) {
+		.name = symbol_from_str("stdout"),
 		.value = file_to_lisp_val(stdout),
-	});
-	env_add(&root_env, (struct assoc) {
-		.name = sym_from_str("stderr"),
+	}));
+	da_append(&root_env, ((struct assoc) {
+		.name = symbol_from_str("stderr"),
 		.value = file_to_lisp_val(stderr),
-	});
+	}));
 
 	bool nostd = false;
 	bool *preloads = malloc(sizeof(bool)*argc);
@@ -3147,29 +3137,26 @@ int main(int argc, char **argv) {
 	list_t args = NULL;
 	if (program_name) {
 		string_t tmp = string_from_str(program_name);
-		args = list_append(args, (struct lisp_val) {
+		args = list_append(args, (lisp_value_t) {
 			.type = LT_STRING,
 			.as.string = tmp,
 		});
-		string_free(tmp);
+		string_decrefs(tmp);
 	} else {
 		args = list_append(args, nil);
 	}
 	for (int i = prog_args_start; i < argc; ++i) {
 		string_t tmp = string_from_str(argv[i]);
-		args = list_append(args, (struct lisp_val) {
+		args = list_append(args, (lisp_value_t) {
 			.type = LT_STRING,
 			.as.string = tmp,
 		});
-		string_free(tmp);
+		string_decrefs(tmp);
 	}
-	env_add(&root_env, (struct assoc) {
-		.name = sym_from_str("args"),
-		.value = (struct lisp_val) {
-			.type = LT_LIST,
-			.as.list = args,
-		},
-	});
+	da_append(&root_env, ((struct assoc) {
+		.name = symbol_from_str("args"),
+		.value = value_of_list(args),
+	}));
 
 	if (!nostd) {
 		run_file("std.lisp");
@@ -3185,5 +3172,5 @@ int main(int argc, char **argv) {
 		run_repl();
 	}
 
-	lisp_val_free(last_res);
+	value_decrefs(last_res);
 }
