@@ -22,7 +22,7 @@ typedef uint64_t u64;
 		while ((amount) + (da)->count > (da)->capacity) { \
 			(da)->capacity *= 2; \
 			/* TODO: unnecessary reallocs here, optimise? */ \
-			(da)->items = realloc((da)->items, (da)->capacity); \
+			(da)->items = realloc((da)->items, (da)->capacity*sizeof(*(da)->items)); \
 		} \
 		if ((amount) == 0) break; \
 		if ((amount) == 1) { \
@@ -41,7 +41,7 @@ typedef uint64_t u64;
 		} \
 		if (1 + (da)->count > (da)->capacity) { \
 			(da)->capacity *= 2; \
-			(da)->items = realloc((da)->items, (da)->capacity); \
+			(da)->items = realloc((da)->items, (da)->capacity*sizeof(*(da)->items)); \
 		} \
 		(da)->items[(da)->count++] = (thing); \
 	} while (0)
@@ -569,9 +569,10 @@ void list_decrefs(lisp_list_t this) {
 void list_destroy(lisp_list_t this) {
 	assert(this->info != NULL);
 
-	if (this->next) list_decrefs(this->next);
 	value_decrefs(this->val);
-	if (this == this->info->last) {
+	if (this->next) list_decrefs(this->next);
+	else {
+		assert(this == this->info->last);
 		assert(this->info->net_refcount == 0);
 		free(this->info);
 	}
