@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -789,6 +790,472 @@ lisp_ ## type_name ## _t type_name ## _copy(lisp_ ## type_name ## _t this) { \
 LIST_OF_GCD_TYPES
 #undef X
 
+/* SECTION: CONSTANTS */
+
+#define LIST_OF_PREDEFINED_SYMBOLS \
+	X(quote,   "quote") \
+	X(nil,     "nil") \
+	X(number,  "number") \
+	X(builtin, "builtin") \
+	X(symbol,  "symbol") \
+	X(list,    "list") \
+	X(boolean, "boolean") \
+	X(string,  "string") \
+	X(file,    "file") \
+	X(clib,    "clib") \
+	X(csym,    "csym") \
+	X(pointer, "pointer")
+
+#define X(name, _) static lisp_value_t name ## _symbol;
+LIST_OF_PREDEFINED_SYMBOLS
+#undef X
+
+/* SECTION: PARSING (DECLARATION) */
+
+struct file_position {
+	size_t line;
+	const char *line_start;
+	const char *pos;
+};
+
+// WARNING: Assumes pos is still within the file!
+void file_position_advance(struct file_position *this);
+// WARNING: Assumes pos will still be within the file!
+struct file_position file_position_after(struct file_position fp, size_t adv_by);
+
+enum parsed_item_type {
+	PIT_OK,
+	PIT_ERR,
+	PIT_UNMATCHED_PAREN,
+	PIT_UNMATCHED_QUOTE,
+	PIT_INVALID_ESCAPE,
+	PIT_OVERFLOW,
+	PIT_NOCHAR,
+
+	PIT_EOF
+};
+
+// like a mix between a token and an ast
+struct parsed_item {
+	struct file_position pos;
+	struct file_position end;
+
+	enum parsed_item_type type;
+	union {
+		lisp_value_t value;
+		char *error;
+	} as;
+};
+
+struct parsed_item parsed_item_error(
+	struct file_position pos, struct file_position end,
+	enum parsed_item_type err_t, char *msg
+);
+struct parsed_item parsed_item_value(
+	struct file_position pos, struct file_position end, lisp_value_t value
+);
+void parsed_item_destroy(struct parsed_item *this);
+
+struct parsed_item quoted_item(struct file_position pos, struct parsed_item item);
+
+struct parser {
+	const char *file_name;
+	const char *file;
+	size_t file_size;
+	struct file_position pos;
+};
+
+struct parser parser_from_strn(const char *name, const char *str, size_t n);
+struct parser parser_from_str(const char *name, const char *str);
+struct parser parser_from_sb(const char *name, struct string_builder sb);
+
+bool parser_isatend(const struct parser *this);
+void parser_advance(struct parser *this);
+int parser_peek(struct parser *this);
+int parser_peeknext(struct parser *this);
+
+bool is_symchar(int ch);
+bool isnot_symchar(int ch);
+void parser_skip_ws_or_comment(struct parser *this);
+
+struct parsed_item parser_next_list(struct parser *this);
+struct parsed_item parser_next_string(struct parser *this);
+struct parsed_item parser_next_number(struct parser *this);
+struct parsed_item parser_next_char(struct parser *this);
+struct parsed_item parser_next_symbol(struct parser *this);
+struct parsed_item parser_next(struct parser *this);
+
+/* SECTION: PARSING (DEFINITION) */
+
+void file_position_advance(struct file_position *this) {
+	if (*(this->pos++) == '\n') {
+		this->line_start = this->pos;
+		++this->line;
+	}
+}
+struct file_position file_position_after(struct file_position fp, size_t adv_by) {
+	struct file_position res = fp;
+	for (size_t i = 0; i < adv_by; ++i) {
+		file_position_advance(&res);
+	}
+	return res;
+}
+
+struct parsed_item parsed_item_error(
+	struct file_position pos, struct file_position end,
+	enum parsed_item_type err_t, char *msg
+) {
+	return (struct parsed_item) {
+		.pos = pos,
+		.end = end,
+
+		.type = err_t,
+		.as.error = msg,
+	};
+}
+struct parsed_item parsed_item_value(
+	struct file_position pos, struct file_position end, lisp_value_t value
+) {
+	return (struct parsed_item) {
+		.pos = pos,
+		.end = end,
+
+		.type = PIT_OK,
+		.as.value = value,
+	};
+}
+void parsed_item_destroy(struct parsed_item *this) {
+	if (this->type == PIT_OK) {
+		value_decrefs(this->as.value);
+	} else {
+		free(this->as.error);
+	}
+}
+
+struct parsed_item quoted_item(struct file_position pos, struct parsed_item item) {
+	if (item.type != PIT_OK) {
+		return item;
+	}
+
+	list_t lst = NULL;
+	lst = list_cons(item.as.value, lst);
+	lst = list_cons(quote_symbol, lst);
+	value_decrefs(item.as.value);
+
+	return parsed_item_value(pos, item.end, value_of_list(lst));
+}
+
+struct parser parser_from_strn(const char *name, const char *str, size_t n) {
+	return (struct parser) {
+		.file_name = name,
+		.file = str,
+		.file_size = n,
+		.pos = {
+			.line = 1,
+			.line_start = str,
+			.pos = str,
+		},
+	};
+}
+struct parser parser_from_str(const char *name, const char *str) {
+	return parser_from_strn(name, str, strlen(str));
+}
+struct parser parser_from_sb(const char *name, struct string_builder sb) {
+	return parser_from_strn(name, sb.items, sb.count);
+}
+
+bool parser_isatend(const struct parser *this) {
+	return this->pos.pos >= this->file + this->file_size;
+}
+void parser_advance(struct parser *this) {
+	if (!parser_isatend(this)) {
+		file_position_advance(&this->pos);
+	}
+}
+int parser_peek(struct parser *this) {
+	return parser_isatend(this) ? -1 : *this->pos.pos;
+}
+int parser_peeknext(struct parser *this) {
+	return this->pos.pos + 1 < this->file + this->file_size
+		? this->pos.pos[1]
+		: -1;
+}
+
+bool is_symchar(int ch) {
+	return !isnot_symchar(ch) && ' ' < ch && ch < '\127';
+}
+bool isnot_symchar(int ch) {
+	return isspace(ch) || ch == '(' || ch == ')' || ch == ';' || ch == '"';
+}
+void parser_skip_ws_or_comment(struct parser *this) {
+	while (isspace(parser_peek(this)) || parser_peek(this) == ';') {
+		if (parser_peek(this) == ';') {
+			while (!parser_isatend(this)
+			&& parser_peek(this) != '\n') {
+				parser_advance(this);
+			}
+		}
+		parser_advance(this);
+	}
+}
+
+struct parsed_item parser_next_list(struct parser *this) {
+	parser_skip_ws_or_comment(this);
+
+	const struct file_position start_pos = this->pos;
+
+	assert(parser_peek(this) == '(');
+	parser_advance(this);
+
+	list_t res = NULL;
+
+	for (;;) {
+		parser_skip_ws_or_comment(this);
+		if (parser_isatend(this)) {
+			return parsed_item_error(
+				start_pos, this->pos, PIT_UNMATCHED_PAREN,
+				strdup("expected closing parenthesis before EOF")
+			);
+		}
+		if (parser_peek(this) == ')') {
+			parser_advance(this);
+			return parsed_item_value(
+				start_pos, this->pos,
+				value_of_list(res)
+			);
+		}
+
+		struct parsed_item tmp = parser_next(this);
+		if (tmp.type != PIT_OK) {
+			list_decrefs(res);
+			return tmp;
+		}
+		res = list_append(res, tmp.as.value);
+		parsed_item_destroy(&tmp);
+	}
+}
+struct parsed_item parser_next_string(struct parser *this) {
+	parser_skip_ws_or_comment(this);
+
+	const struct file_position start_pos = this->pos;
+
+	assert(parser_peek(this) == '"');
+	parser_advance(this);
+
+	const char *str_begin = this->pos.pos;
+
+	while (!parser_isatend(this) && parser_peek(this) != '"') {
+		if (parser_peek(this) == '\\') parser_advance(this);
+		if (parser_peek(this) == '\n') {
+			return parsed_item_error(
+				start_pos, this->pos, PIT_UNMATCHED_QUOTE,
+				strdup("expected closing quote before newline")
+			);
+		}
+		parser_advance(this);
+	}
+
+	if (parser_isatend(this)) {
+		return parsed_item_error(
+			start_pos, this->pos, PIT_UNMATCHED_QUOTE,
+			strdup("expected closing quote before EOF")
+		);
+	}
+
+	const char *str_end = this->pos.pos;
+
+	assert(parser_peek(this) == '"');
+	parser_advance(this);
+
+	string_t res = malloc(sizeof(*res));
+	*res = (struct string) {
+		.data = malloc(sizeof(char)*(str_end-str_begin)),
+		.len = 0,
+
+		.borrows = NULL,
+		.refcount = 1,
+	};
+
+	for (const char *c = str_begin; c < str_end; ++c) {
+		if (*c == '\\') {
+			const struct file_position before_bslash = file_position_after(
+				start_pos, 1 + (c - str_begin)
+			);
+
+			++c;
+			for (size_t i = 0; i < sizeof(escapes)/sizeof(*escapes); ++i) {
+				if (escapes[i][1] == *c) {
+					res->data[res->len++] = escapes[i][0];
+					goto escaped;
+				}
+			}
+
+			const struct file_position after_escapecode = file_position_after(
+				before_bslash, 2
+			);
+
+			free(res->data);
+			free(res);
+			return parsed_item_error(
+				before_bslash, after_escapecode, PIT_INVALID_ESCAPE,
+				strdup("unrecognised escape code")
+			);
+		escaped:;
+		} else {
+			res->data[res->len++] = *c;
+		}
+	}
+
+	return parsed_item_value(start_pos, this->pos, value_of_string(res));
+}
+struct parsed_item parser_next_number(struct parser *this) {
+	parser_skip_ws_or_comment(this);
+
+	const struct file_position start_pos = this->pos;
+
+	const bool negative = parser_peek(this) == '-';
+	if (negative) parser_advance(this);
+	u64 res = 0;
+
+	while (isdigit(parser_peek(this))) {
+		const u64 oldres = res;
+		res *= 10;
+		res += parser_peek(this) - '0';
+
+		if (res < oldres) {
+			return parsed_item_error(
+				start_pos, this->pos, PIT_OVERFLOW,
+				strdup("integer magnitude too large to represent in 64-bit number")
+			);
+		}
+
+		parser_advance(this);
+	}
+
+	if (!negative && res == (1ul << 63)) {
+		return parsed_item_error(
+			start_pos, this->pos, PIT_OVERFLOW,
+			strdup("2**63 not representable as a positive signed 64-bit number")
+		);
+	}
+
+	if (negative) res = 1+~res;
+
+	return parsed_item_value(
+		start_pos, this->pos,
+		value_of_number(*(i64*)res)
+	);
+}
+struct parsed_item parser_next_char(struct parser *this) {
+	parser_skip_ws_or_comment(this);
+
+	const struct file_position start_pos = this->pos;
+
+	assert(parser_peek(this) == '#');
+	parser_advance(this);
+	assert(!is_symchar(parser_peek(this)));
+	
+	while (isspace(parser_peek(this))) parser_advance(this);
+
+	if (parser_isatend(this)) {
+		return parsed_item_error(
+			start_pos, this->pos, PIT_NOCHAR,
+			strdup("expected character after #, got EOF")
+		);
+	}
+
+	const char ch = parser_peek(this);
+	const struct file_position before_bslash = this->pos;
+	parser_advance(this);
+
+	if (ch == '\\') {
+		if (parser_isatend(this)) {
+			return parsed_item_error(
+				start_pos, this->pos, PIT_NOCHAR,
+				strdup("expected escape code, got EOF")
+			);
+
+			const char e = parser_peek(this);
+			parser_advance(this);
+
+			for (size_t i = 0; i < sizeof(escapes)/sizeof(*escapes); ++i) {
+				if (escapes[i][1] == e) {
+					return parsed_item_value(
+						start_pos, this->pos,
+						value_of_number(escapes[i][0])
+					);
+				}
+			}
+
+			return parsed_item_error(
+				before_bslash, this->pos, PIT_INVALID_ESCAPE,
+				strdup("unrecognised escape code")
+			);
+		}
+	}
+
+	return parsed_item_value(
+		start_pos, this->pos,
+		value_of_number(ch)
+	);
+}
+struct parsed_item parser_next_symbol(struct parser *this) {
+	parser_skip_ws_or_comment(this);
+
+	const struct file_position start_pos = this->pos;
+
+	if (parser_isatend(this)) {
+		return parsed_item_error(
+			this->pos, this->pos, PIT_EOF,
+			strdup("expected a value, but got EOF")
+		);
+	}
+
+	while (is_symchar(parser_peek(this))) {
+		parser_advance(this);
+	}
+
+	return parsed_item_value(
+		start_pos, this->pos,
+		value_of_symbol(symbol_from_strn(
+			start_pos.pos, this->pos.pos-start_pos.pos
+		))
+	);
+}
+struct parsed_item parser_next(struct parser *this) {
+	parser_skip_ws_or_comment(this);
+	if (parser_isatend(this)) {
+		return parsed_item_error(
+			this->pos, this->pos, PIT_EOF,
+			strdup("expected a value, but got EOF")
+		);
+	}
+
+	if (parser_peek(this) == '(') {
+		return parser_next_list(this);
+	} else if (parser_peek(this) == '"') {
+		return parser_next_string(this);
+	} else if (isdigit(parser_peek(this))) {
+		return parser_next_number(this);
+	} else if (parser_peek(this) == '-' && isdigit(parser_peeknext(this))) {
+		return parser_next_number(this);
+	} else if ((parser_peek(this) == 'T' || parser_peek(this) == 'F')
+	&& !is_symchar(parser_peeknext(this))) {
+		const struct file_position pos = this->pos;
+		const lisp_value_t value = value_of_boolean(parser_peek(this) == 'T');
+		parser_advance(this);
+		return parsed_item_value(pos, this->pos, value);
+	} else if (parser_peek(this) == '\'' && !is_symchar(parser_peeknext(this))) {
+		const struct file_position pos = this->pos;
+		parser_advance(this);
+		return quoted_item(pos, parser_next(this));
+	} else if (parser_peek(this) == '#' && !is_symchar(parser_peeknext(this))) {
+		return parser_next_char(this);
+	} else {
+		return parser_next_symbol(this);
+	}
+}
+
 /* SECTION: ENVIRONMENTS */
 
 struct assoc {
@@ -853,6 +1320,9 @@ void env_free(struct env *env) {
 	*env = (struct env) {0};
 	free(env);
 }
+
+struct env root_env = {0};
+struct env *curr_env = &root_env;
 
 /* SECTION: TODO REWRITE */
 
@@ -966,7 +1436,6 @@ struct call_res _builtin_call(
 		return this->fn(args);
 	}
 }
-extern struct env *curr_env;
 lisp_value_t substitute(lisp_value_t into, struct env *from);
 struct call_res _list_call(
 	const list_t this,
@@ -1081,210 +1550,7 @@ struct call_res _list_call(
 	}
 }
 
-/* SECTION: CONSTANTS */
-
-#define LIST_OF_PREDEFINED_SYMBOLS \
-	X(quote,   "quote") \
-	X(nil,     "nil") \
-	X(number,  "number") \
-	X(builtin, "builtin") \
-	X(symbol,  "symbol") \
-	X(list,    "list") \
-	X(boolean, "boolean") \
-	X(string,  "string") \
-	X(file,    "file") \
-	X(clib,    "clib") \
-	X(csym,    "csym") \
-	X(pointer, "pointer")
-
-#define X(name, _) static lisp_value_t name ## _symbol;
-LIST_OF_PREDEFINED_SYMBOLS
-#undef X
-
 /* SECTION: REFACTOR PENDING */
-
-#define advance() do { ++*str; --*str_len; } while (0)
-
-void skip_ws(const char **str, size_t *str_len) {
-	while (*str_len && (
-		**str == ' ' || **str == '\t' || **str == '\n' || **str == ';'
-	)) {
-		if (**str == ';') {
-			while (*str_len && **str != '\n') {
-				advance();
-			}
-		}
-		advance();
-	}
-}
-
-bool is_break(char c) {
-	return c == ' ' || c == '(' || c == ')' || c == '\t' || c == '\n' || c == ';' || c == '"';
-}
-
-lisp_value_t quote(lisp_value_t value) {
-	list_t lst = NULL;
-	lst = list_append(lst, quote_symbol);
-	lst = list_append(lst, value);
-	return value_of_list(lst);
-}
-
-lisp_value_t lisp_val_parse(const char **str, size_t *str_len);
-list_t list_parse(const char **str, size_t *str_len) {
-	list_t res = NULL;
-
-	for (;;) {
-		skip_ws(str, str_len);
-		if (*str_len == 0) {
-			fprintf(stderr, "expected value or end of list, got EOF\n");
-			exit(1);
-		}
-		if (**str == ')') {
-			advance();
-			return res;
-		}
-
-		lisp_value_t tmp = lisp_val_parse(str, str_len);
-		res = list_append(res, tmp);
-		value_decrefs(tmp);
-	}
-}
-
-i64 num_parse(const char **str, size_t *str_len) {
-	i64 res = 0;
-
-	while (*str_len && '0' <= **str && **str <= '9') {
-		res *= 10;
-		res += **str - '0';
-		advance();
-	}
-
-	return res;
-}
-
-symbol_t sym_parse(const char **str, size_t *str_len) {
-	const char *begin = *str;
-
-	while (*str_len && !is_break(**str)) {
-		advance();
-	}
-
-	return symbol_from_strn(begin, (*str)-begin);
-}
-
-string_t string_parse(const char **str, size_t *str_len) {
-	assert(**str == '"');
-	advance();
-	const char *begin = *str;
-
-	while (*str_len && **str != '"') {
-		if (**str == '\\') advance();
-		if (*str_len) advance();
-	}
-
-	if (*str_len == 0) {
-		fprintf(stderr, "unexpected EOF while parsing string\n");
-		exit(1);
-	}
-
-	assert(**str == '"');
-	const char *end = *str;
-	advance();
-
-	string_t res = malloc(sizeof(*res));
-	*res = (struct string) {
-		.data = malloc(sizeof(char)*(end-begin)),
-		.len = 0,
-
-		.borrows = NULL,
-		.refcount = 1,
-	};
-
-	for (const char *c = begin; c < end; ++c) {
-		if (*c == '\\') {
-			++c;
-			for (size_t i = 0; i < sizeof(escapes)/sizeof(*escapes); ++i) {
-				if (escapes[i][1] == *c) {
-					res->data[res->len++] = escapes[i][0];
-					goto escaped;	
-				}
-			}
-			fprintf(stderr, "while parsing string, found \\%c.\n", *c);
-			assert(false && "unrecognised escape code");
-	escaped:;
-		} else {
-			res->data[res->len++] = *c;
-		}
-	}
-
-	return res;
-}
-
-
-i64 char_parse(const char **str, size_t *str_len) {
-	skip_ws(str, str_len);
-
-	if (*str_len == 0) {
-		fprintf(stderr, "unexpected EOF while parsing character\n");
-		exit(1);
-	}
-
-	const char c = **str;
-	advance();
-
-	if (c == '\\') {
-		if (*str_len == 0) {
-			fprintf(stderr, "unexpected EOF while parsing character\n");
-			exit(1);
-		}
-
-		const char e = **str;
-		advance();
-
-		for (size_t i = 0; i < sizeof(escapes)/sizeof(*escapes); ++i) {
-			if (escapes[i][1] == e) {
-				return escapes[i][0];
-			}
-		}
-		assert(false && "unrecognised escape code");
-	}
-
-	return c;
-}
-
-lisp_value_t lisp_val_parse(const char **str, size_t *str_len) {
-	skip_ws(str, str_len);
-	if (*str_len == 0) {
-		fprintf(stderr, "expected value, got EOF\n");
-		exit(1);
-	}
-	if (**str == '(') {
-		advance();
-		return value_of_list(list_parse(str, str_len));
-	} else if (**str == '"') {
-		return value_of_string(string_parse(str, str_len));
-	} else if ('0' <= **str && **str <= '9') {
-		return value_of_number(num_parse(str, str_len));
-	} else if ((**str == 'T' || **str == 'F') && (*str_len == 1 || is_break(*((*str)+1)))) {
-		const char c = **str;
-		advance();
-		return value_of_boolean(c == 'T');
-	} else if (**str == '\'' && (*str_len == 1 || is_break(*((*str)+1)))) {
-		advance();
-		lisp_value_t tmp = lisp_val_parse(str, str_len);
-		lisp_value_t res = quote(tmp);
-		value_decrefs(tmp);
-		return res;
-	} else if (**str == '#' && (*str_len == 1 || is_break(*((*str)+1)))) {
-		advance();
-		return value_of_number(char_parse(str, str_len));
-	} else {
-		return value_of_symbol(sym_parse(str, str_len));
-	}
-}
-
-struct env root_env = {0};
-struct env *curr_env = &root_env;
 
 struct call_res ladd(list_t args) {
 	assert(args != NULL);
