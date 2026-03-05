@@ -804,7 +804,10 @@ LIST_OF_GCD_TYPES
 	X(file,    "file") \
 	X(clib,    "clib") \
 	X(csym,    "csym") \
-	X(pointer, "pointer")
+	X(pointer, "pointer") \
+	X(value,   "value") \
+	X(error,   "error") \
+	X(eof,     "eof")
 
 #define X(name, _) static lisp_value_t name ## _symbol;
 LIST_OF_PREDEFINED_SYMBOLS
@@ -2117,6 +2120,64 @@ struct call_res lrepr(list_t args) {
 	return call_res_from(value_of_string(sb_to_string(&sb)));
 }
 
+list_t create_parse_error(struct parsed_item item) {
+	assert(item.type != PIT_OK);
+
+	list_t error = NULL;
+
+	string_t error_msg = string_from_str(item.as.error);
+	error = list_cons(value_of_string(error_msg), error);
+	string_decrefs(error_msg);
+
+	string_t place = string_from_strn(item.pos.pos, item.end.pos - item.pos.pos);
+	error = list_cons(value_of_string(place), error);
+	string_decrefs(place);
+
+	switch (item.type) {
+		case PIT_OK: assert(false && "unreachable");
+		case PIT_ERR: {
+			string_t sort = string_from_str("error");
+			error = list_cons(value_of_string(sort), error);
+			string_decrefs(sort);
+		} break;
+		case PIT_UNMATCHED_PAREN: {
+			string_t sort = string_from_str("unmatched opening parenthesis");
+			error = list_cons(value_of_string(sort), error);
+			string_decrefs(sort);
+		} break;
+		case PIT_UNMATCHED_QUOTE: {
+			string_t sort = string_from_str("unmatched quote");
+			error = list_cons(value_of_string(sort), error);
+			string_decrefs(sort);
+		} break;
+		case PIT_INVALID_ESCAPE: {
+			string_t sort = string_from_str("invalid escape code");
+			error = list_cons(value_of_string(sort), error);
+			string_decrefs(sort);
+		} break;
+		case PIT_OVERFLOW: {
+			string_t sort = string_from_str("overflow while parsing number");
+			error = list_cons(value_of_string(sort), error);
+			string_decrefs(sort);
+		} break;
+		case PIT_NOCHAR: {
+			string_t sort = string_from_str("no character found following #");
+			error = list_cons(value_of_string(sort), error);
+			string_decrefs(sort);
+		} break;
+		case PIT_EOF: {
+			string_t sort = string_from_str("end of file");
+			error = list_cons(value_of_string(sort), error);
+			string_decrefs(sort);
+		} break;
+	}
+
+	error = list_cons(value_of_number(item.pos.line), error);
+	if (item.type == PIT_EOF) error = list_cons(eof_symbol, error);
+	else error = list_cons(error_symbol, error);
+
+	return error;
+}
 struct call_res lparse(list_t args) {
 	assert(args != NULL);
 	assert(args->val.type == LT_STRING);
@@ -2127,21 +2188,31 @@ struct call_res lparse(list_t args) {
 	const char *str = args->val.as.string->data;
 	size_t len = args->val.as.string->len;
 
-	skip_ws(&str, &len);
-	if (len == 0) {
-		string_t tmp = string_from_str("");
-		res = list_cons(value_of_string(tmp), res);
-		string_decrefs(tmp);
-		return call_res_from(value_of_list(res));
-	}
+	struct parser parser = parser_from_strn("<string>", str, len);
+	struct parsed_item item = parser_next(&parser);
 
-	lisp_value_t parsed = lisp_val_parse(&str, &len);
-	string_t tmp = string_substr(args->val.as.string, str - args->val.as.string->data, args->val.as.string->len);
-	res = list_append(res, value_of_string(tmp));
+	string_t tmp = string_substr(
+		args->val.as.string,
+		parser.pos.pos - args->val.as.string->data,
+		args->val.as.string->len
+	);
+	res = list_cons(value_of_string(tmp), res);
 	string_decrefs(tmp);
 
-	res = list_append(res, parsed);
-	value_decrefs(parsed);
+	if (item.type == PIT_OK) {
+		list_t value = NULL;
+		value = list_cons(item.as.value, value);
+		value = list_cons(value_symbol, value);
+		res = list_cons(value_of_list(value), res);
+		list_decrefs(value);
+	} else {
+		list_t error = create_parse_error(item);
+
+		res = list_cons(value_of_list(error), res);
+		list_decrefs(error);
+	}
+
+	parsed_item_destroy(&item);
 
 	return call_res_from(value_of_list(res));
 }
@@ -3323,15 +3394,31 @@ void run_file(const char *fname) {
 	}
 
 	fclose(f);
-	const char *begin = data;
+	struct parser parser = parser_from_strn(fname, data, len);
 	for (;;) {
-		skip_ws(&begin, &len);
-		if (!len) goto finish;
-		lisp_value_t parsed = lisp_val_parse(&begin, &len);
-		lisp_value_t evald = eval(parsed);
-		value_decrefs(parsed);
-		value_decrefs(last_res);
-		last_res = evald;
+		parser_skip_ws_or_comment(&parser);
+		if (parser_isatend(&parser)) goto finish;
+		struct parsed_item item = parser_next(&parser);
+		switch (item.type) {
+			case PIT_OK: {
+				lisp_value_t evald = eval(item.as.value);
+				value_decrefs(last_res);
+				last_res = evald;
+			} break;
+			default: {
+				fprintf(stderr, "Encountered error parsing file %s:\n", fname);
+				fprintf(stderr, "%s:%lu,%lu %s\n", fname, item.pos.line, item.pos.pos - item.pos.line_start, item.as.error);
+				for (size_t i = 0; i < item.pos.pos - item.pos.line_start; ++i) {
+					fputc(' ', stderr);
+				}
+				for (const char *it = item.pos.pos; it < item.end.pos && *it != '\n'; ++it) {
+					fputc('v', stderr);
+				}
+				fprintf(stderr, "%.*s\n", (int)(item.end.pos - item.pos.line_start), item.pos.line_start);
+				goto finish;
+			} break;
+		}
+		parsed_item_destroy(&item);
 	}
 
 finish:
@@ -3346,17 +3433,29 @@ void run_repl(void) {
 			break;
 		}
 
-		line = line_builder.items;
-		line_len = line_builder.count;
+		struct parser parser = parser_from_sb("<repl>", line_builder);
 
-		// cast &line to (void*) to side-step incorrect constness warnings from the compiler
-		lisp_value_t parsed = lisp_val_parse((void*)&line, &line_len);
-		lisp_value_t evald = eval(parsed);
+		struct parsed_item item = parser_next(&parser);
+		switch (item.type) {
+			case PIT_OK: {
+				lisp_value_t evald = eval(item.as.value);
+				value_decrefs(last_res);
+				last_res = evald;
+			} break;
+			default: {
+				fprintf(stderr, "Encountered error parsing line:\n");
+				fprintf(stderr, "%s:%lu,%lu %s\n", "<repl>", item.pos.line, item.pos.pos - item.pos.line_start, item.as.error);
+				for (size_t i = 0; i < item.pos.pos - item.pos.line_start; ++i) {
+					fputc(' ', stderr);
+				}
+				for (const char *it = item.pos.pos; it < item.end.pos && *it != '\n'; ++it) {
+					fputc('v', stderr);
+				}
+				fprintf(stderr, "%.*s\n", (int)(item.end.pos - item.pos.line_start), item.pos.line_start);
+			} break;
+		}
+		parsed_item_destroy(&item);
 
-		value_decrefs(parsed);
-		value_decrefs(last_res);
-
-		last_res = evald;
 		struct string_builder sb = {0};
 		value_repr(last_res, &sb);
 		printf("%.*s\n", (int)sb.count, sb.items);
