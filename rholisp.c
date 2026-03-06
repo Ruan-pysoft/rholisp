@@ -1003,6 +1003,8 @@ void parser_skip_ws_or_comment(struct parser *this) {
 }
 
 struct parsed_item parser_next_list(struct parser *this) {
+	assert(this != NULL);
+
 	parser_skip_ws_or_comment(this);
 
 	const struct file_position start_pos = this->pos;
@@ -1038,6 +1040,8 @@ struct parsed_item parser_next_list(struct parser *this) {
 	}
 }
 struct parsed_item parser_next_string(struct parser *this) {
+	assert(this != NULL);
+
 	parser_skip_ws_or_comment(this);
 
 	const struct file_position start_pos = this->pos;
@@ -1146,10 +1150,12 @@ struct parsed_item parser_next_number(struct parser *this) {
 
 	return parsed_item_value(
 		start_pos, this->pos,
-		value_of_number(*(i64*)res)
+		value_of_number(*(i64*)&res)
 	);
 }
 struct parsed_item parser_next_char(struct parser *this) {
+	assert(this != NULL);
+
 	parser_skip_ws_or_comment(this);
 
 	const struct file_position start_pos = this->pos;
@@ -1226,6 +1232,8 @@ struct parsed_item parser_next_symbol(struct parser *this) {
 	);
 }
 struct parsed_item parser_next(struct parser *this) {
+	assert(this != NULL);
+
 	parser_skip_ws_or_comment(this);
 	if (parser_isatend(this)) {
 		return parsed_item_error(
