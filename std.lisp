@@ -234,8 +234,17 @@
 )
 
 (defn parse-one (str)
-  "  -> parse a single value from a string"
+  "  -> parse a single item from a string"
   (scd (parse str))
+)
+(defn parse-val (str)
+  "  -> parse a value from a string, exiting on error"
+  (assoc (res (scd parse str))
+    (if (or (not res) (!= (head res) ' value))
+      (do (println "Expected a value, but got" res "instead") (exit 1))
+      (scd res)
+    )
+  )
 )
 
 (defm fopen (file () mode)
@@ -274,10 +283,12 @@
 
 (defn run (prog)
   "  -> parse and evaluate the program, given as a string"
-  (assoc (parsed (parse prog))
-    (if (tail parsed) (do
-      (eval (scd parsed))
+  (assoc (parsed (println "evaling:" (parse prog)))
+    (if (and (tail parsed) (= (head (scd parsed)) ' value)) (do
+      (eval (scd (scd parsed)))
       (run (head parsed))
+    ) (if (tail parsed)
+      (println "Got error while running program:" (scd parsed))
     ))
   )
 )

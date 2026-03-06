@@ -2199,14 +2199,6 @@ struct call_res lparse(list_t args) {
 	struct parser parser = parser_from_strn("<string>", str, len);
 	struct parsed_item item = parser_next(&parser);
 
-	string_t tmp = string_substr(
-		args->val.as.string,
-		parser.pos.pos - args->val.as.string->data,
-		args->val.as.string->len
-	);
-	res = list_cons_with(value_of_string(tmp), res);
-	string_decrefs(tmp);
-
 	if (item.type == PIT_OK) {
 		list_t value = NULL;
 		value = list_cons_with(item.as.value, value);
@@ -2219,6 +2211,14 @@ struct call_res lparse(list_t args) {
 		res = list_cons_with(value_of_list(error), res);
 		list_decrefs(error);
 	}
+
+	string_t tmp = string_substr(
+		args->val.as.string,
+		parser.pos.pos - args->val.as.string->data,
+		args->val.as.string->len
+	);
+	res = list_cons_with(value_of_string(tmp), res);
+	string_decrefs(tmp);
 
 	parsed_item_destroy(&item);
 
