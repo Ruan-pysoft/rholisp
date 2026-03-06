@@ -405,7 +405,7 @@ void number_repr(const lisp_number_t this, struct string_builder *sb) {
 		// swap repr[i] and repr[len-1 - i]
 		const char tmp = sb->items[begin + i];
 		sb->items[begin + i] = sb->items[begin+len-1 - i];
-		sb->items[begin+len-1 - 1] = tmp;
+		sb->items[begin+len-1 - i] = tmp;
 	}
 }
 bool number_is_truthy(const lisp_number_t this) {
@@ -1183,24 +1183,24 @@ struct parsed_item parser_next_char(struct parser *this) {
 				start_pos, this->pos, PIT_NOCHAR,
 				strdup("expected escape code, got EOF")
 			);
-
-			const char e = parser_peek(this);
-			parser_advance(this);
-
-			for (size_t i = 0; i < sizeof(escapes)/sizeof(*escapes); ++i) {
-				if (escapes[i][1] == e) {
-					return parsed_item_value(
-						start_pos, this->pos,
-						value_of_number(escapes[i][0])
-					);
-				}
-			}
-
-			return parsed_item_error(
-				before_bslash, this->pos, PIT_INVALID_ESCAPE,
-				strdup("unrecognised escape code")
-			);
 		}
+
+		const char e = parser_peek(this);
+		parser_advance(this);
+
+		for (size_t i = 0; i < sizeof(escapes)/sizeof(*escapes); ++i) {
+			if (escapes[i][1] == e) {
+				return parsed_item_value(
+					start_pos, this->pos,
+					value_of_number(escapes[i][0])
+				);
+			}
+		}
+
+		return parsed_item_error(
+			before_bslash, this->pos, PIT_INVALID_ESCAPE,
+			strdup("unrecognised escape code")
+		);
 	}
 
 	return parsed_item_value(
