@@ -628,7 +628,7 @@ list_t list_dup(list_t this) {
 // this is checked with an assertion!
 list_t list_append(list_t this, lisp_value_t val) {
 	if (this == NULL) {
-		return list_cons(val, NULL);
+		return list_cons_with(val, NULL);
 	}
 	assert(this->info->net_refcount == 1);
 
@@ -941,8 +941,8 @@ struct parsed_item quoted_item(struct file_position pos, struct parsed_item item
 	}
 
 	list_t lst = NULL;
-	lst = list_cons(item.as.value, lst);
-	lst = list_cons(quote_symbol, lst);
+	lst = list_cons_with(item.as.value, lst);
+	lst = list_cons_with(quote_symbol, lst);
 	value_decrefs(item.as.value);
 
 	return parsed_item_value(pos, item.end, value_of_list(lst));
@@ -2134,55 +2134,55 @@ list_t create_parse_error(struct parsed_item item) {
 	list_t error = NULL;
 
 	string_t error_msg = string_from_str(item.as.error);
-	error = list_cons(value_of_string(error_msg), error);
+	error = list_cons_with(value_of_string(error_msg), error);
 	string_decrefs(error_msg);
 
 	string_t place = string_from_strn(item.pos.pos, item.end.pos - item.pos.pos);
-	error = list_cons(value_of_string(place), error);
+	error = list_cons_with(value_of_string(place), error);
 	string_decrefs(place);
 
 	switch (item.type) {
 		case PIT_OK: assert(false && "unreachable");
 		case PIT_ERR: {
 			string_t sort = string_from_str("error");
-			error = list_cons(value_of_string(sort), error);
+			error = list_cons_with(value_of_string(sort), error);
 			string_decrefs(sort);
 		} break;
 		case PIT_UNMATCHED_PAREN: {
 			string_t sort = string_from_str("unmatched opening parenthesis");
-			error = list_cons(value_of_string(sort), error);
+			error = list_cons_with(value_of_string(sort), error);
 			string_decrefs(sort);
 		} break;
 		case PIT_UNMATCHED_QUOTE: {
 			string_t sort = string_from_str("unmatched quote");
-			error = list_cons(value_of_string(sort), error);
+			error = list_cons_with(value_of_string(sort), error);
 			string_decrefs(sort);
 		} break;
 		case PIT_INVALID_ESCAPE: {
 			string_t sort = string_from_str("invalid escape code");
-			error = list_cons(value_of_string(sort), error);
+			error = list_cons_with(value_of_string(sort), error);
 			string_decrefs(sort);
 		} break;
 		case PIT_OVERFLOW: {
 			string_t sort = string_from_str("overflow while parsing number");
-			error = list_cons(value_of_string(sort), error);
+			error = list_cons_with(value_of_string(sort), error);
 			string_decrefs(sort);
 		} break;
 		case PIT_NOCHAR: {
 			string_t sort = string_from_str("no character found following #");
-			error = list_cons(value_of_string(sort), error);
+			error = list_cons_with(value_of_string(sort), error);
 			string_decrefs(sort);
 		} break;
 		case PIT_EOF: {
 			string_t sort = string_from_str("end of file");
-			error = list_cons(value_of_string(sort), error);
+			error = list_cons_with(value_of_string(sort), error);
 			string_decrefs(sort);
 		} break;
 	}
 
-	error = list_cons(value_of_number(item.pos.line), error);
-	if (item.type == PIT_EOF) error = list_cons(eof_symbol, error);
-	else error = list_cons(error_symbol, error);
+	error = list_cons_with(value_of_number(item.pos.line), error);
+	if (item.type == PIT_EOF) error = list_cons_with(eof_symbol, error);
+	else error = list_cons_with(error_symbol, error);
 
 	return error;
 }
@@ -2204,19 +2204,19 @@ struct call_res lparse(list_t args) {
 		parser.pos.pos - args->val.as.string->data,
 		args->val.as.string->len
 	);
-	res = list_cons(value_of_string(tmp), res);
+	res = list_cons_with(value_of_string(tmp), res);
 	string_decrefs(tmp);
 
 	if (item.type == PIT_OK) {
 		list_t value = NULL;
-		value = list_cons(item.as.value, value);
-		value = list_cons(value_symbol, value);
-		res = list_cons(value_of_list(value), res);
+		value = list_cons_with(item.as.value, value);
+		value = list_cons_with(value_symbol, value);
+		res = list_cons_with(value_of_list(value), res);
 		list_decrefs(value);
 	} else {
 		list_t error = create_parse_error(item);
 
-		res = list_cons(value_of_list(error), res);
+		res = list_cons_with(value_of_list(error), res);
 		list_decrefs(error);
 	}
 
@@ -2452,8 +2452,8 @@ struct call_res lffi_load(list_t args) {
 		return call_res_from(value_of_string(string_from_str(dlerror())));
 	} else {
 		list_t res = NULL;
-		res = list_cons(value_of_number(*(i64*)&lib), res);
-		res = list_cons(value_copy(clib_symbol), res);
+		res = list_cons_with(value_of_number(*(i64*)&lib), res);
+		res = list_cons_with(value_copy(clib_symbol), res);
 		return call_res_from(value_of_list(res));
 	}
 }
@@ -2496,8 +2496,8 @@ struct call_res lffi_sym(list_t args) {
 		return call_res_from(value_of_string(string_from_str(err)));
 	} else {
 		list_t res = NULL;
-		res = list_cons(value_of_number(*(i64*)&sym), res);
-		res = list_cons(value_copy(csym_symbol), res);
+		res = list_cons_with(value_of_number(*(i64*)&sym), res);
+		res = list_cons_with(value_copy(csym_symbol), res);
 		return call_res_from(value_of_list(res));
 	}
 
@@ -2773,8 +2773,8 @@ lisp_value_t destruct_cval_from(struct ctype type, void *memory, size_t *size) {
 			// fprintf(stderr, "Constructing pointer from memory location %p to get value %p.\n", memory, *(void**)memory);
 			*size = ctype_size[CT_PTR];
 			list_t res = NULL;
-			res = list_cons(value_of_number(*(i64*)memory), res);
-			res = list_cons(pointer_symbol, res);
+			res = list_cons_with(value_of_number(*(i64*)memory), res);
+			res = list_cons_with(pointer_symbol, res);
 			return value_of_list(res);
 		} break;
 		case CT_VOID: {
@@ -2903,8 +2903,8 @@ lisp_value_t cval_to_lisp_val(struct ctype type, ffi_arg *cval) {
 		} break;
 		case CT_PTR: {
 			list_t res = NULL;
-			res = list_cons(value_of_number(*(i64*)cval), res);
-			res = list_cons(pointer_symbol, res);
+			res = list_cons_with(value_of_number(*(i64*)cval), res);
+			res = list_cons_with(pointer_symbol, res);
 			return value_of_list(res);
 		} break;
 		case CT_STRUCT: {
@@ -2990,8 +2990,8 @@ struct call_res lstring_data_ptr(list_t args) {
 	assert(args->next == NULL);
 
 	list_t res = NULL;
-	res = list_cons(value_of_number(*(i64*)&args->val.as.string->data), res);
-	res = list_cons(pointer_symbol, res);
+	res = list_cons_with(value_of_number(*(i64*)&args->val.as.string->data), res);
+	res = list_cons_with(pointer_symbol, res);
 
 	return call_res_from(value_of_list(res));
 }
@@ -3043,7 +3043,7 @@ struct call_res ldestruct_val(list_t args) {
 	lisp_value_t val_size = value_of_number(*(i64*)&read_size);
 
 	return call_res_from(value_of_list(
-		list_cons(val, list_cons(val_size, NULL))
+		list_cons_with(val, list_cons_with(val_size, NULL))
 	));
 }
 
