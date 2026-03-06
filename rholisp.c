@@ -985,7 +985,7 @@ int parser_peeknext(struct parser *this) {
 }
 
 bool is_symchar(int ch) {
-	return !isnot_symchar(ch) && ' ' < ch && ch < '\127';
+	return !isnot_symchar(ch) && ' ' < ch && ch < '\x7f';
 }
 bool isnot_symchar(int ch) {
 	return isspace(ch) || ch == '(' || ch == ')' || ch == ';' || ch == '"';
@@ -3414,6 +3414,7 @@ void run_file(const char *fname) {
 				for (const char *it = item.pos.pos; it < item.end.pos && *it != '\n'; ++it) {
 					fputc('v', stderr);
 				}
+				fputc('\n', stderr);
 				fprintf(stderr, "%.*s\n", (int)(item.end.pos - item.pos.line_start), item.pos.line_start);
 				goto finish;
 			} break;
@@ -3451,6 +3452,7 @@ void run_repl(void) {
 				for (const char *it = item.pos.pos; it < item.end.pos && *it != '\n'; ++it) {
 					fputc('v', stderr);
 				}
+				fputc('\n', stderr);
 				fprintf(stderr, "%.*s\n", (int)(item.end.pos - item.pos.line_start), item.pos.line_start);
 			} break;
 		}
