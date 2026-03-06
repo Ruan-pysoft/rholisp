@@ -3581,4 +3581,10 @@ int main(int argc, char **argv) {
 	}
 
 	value_decrefs(last_res);
+
+	// this is purely to make the address sanitiser shut up,
+	// this is not needed at all
+#define X(name, value) value_decrefs(name ## _symbol);
+	LIST_OF_PREDEFINED_SYMBOLS
+#undef X
 }
