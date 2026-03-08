@@ -1453,6 +1453,7 @@ struct call_stack {
 void function_enter(lisp_value_t function, struct value_location location);
 void function_enter_no_location(lisp_value_t function);
 void function_leave(void);
+void call_stack_print(FILE *f);
 
 void function_enter(lisp_value_t function, struct value_location location) {
 	string_increfs(location.file_name);
@@ -1482,8 +1483,6 @@ void function_leave(void) {
 	--call_stack.count;
 }
 
-/* SECTION: TODO REWRITE */
-
 struct list_fn {
 	list_t params;
 	bool is_macro;
@@ -1491,6 +1490,72 @@ struct list_fn {
 	string_t doc;
 	lisp_value_t body;
 };
+
+void list_fn_free(struct list_fn this);
+struct list_fn list_to_fn(list_t list);
+bool list_is_fn(list_t list);
+
+void call_stack_print(FILE *f) {
+	size_t i = call_stack.count;
+
+	if (i == 0) {
+		fprintf(f, "In toplevel\n");
+
+		return;
+	}
+
+	while (i --> 0) {
+		struct call_frame frame = call_stack.items[i];
+
+		if (frame.function.type == LT_BUILTIN) {
+			const bool macro = !frame.function.as.builtin->eval_args;
+
+			fprintf(
+				f,
+				"In builtin %s %s",
+				macro ? "macro" : "function",
+				frame.function.as.builtin->name->sym
+			);
+		} else if (frame.function.type == LT_LIST && list_is_fn(frame.function.as.list)) {
+			struct list_fn fn = list_to_fn(frame.function.as.list);
+
+			if (fn.name == NULL) {
+				fprintf(
+					f,
+					"In anonymous %s",
+					fn.is_macro ? "macro" : "function"
+				);
+			} else {
+				fprintf(
+					f,
+					"In %s %s",
+					fn.is_macro ? "macro" : "function",
+					fn.name->sym
+				);
+			}
+		} else {
+			struct string_builder sb = {0};
+			value_repr(frame.function, &sb);
+			fprintf(f, "In non-function value %.*s", (int)sb.count, sb.items);
+			sb_clear(&sb);
+		}
+
+		if (frame.has_from_location) {
+			fprintf(
+				f,
+				", called from %.*s:%ld\n",
+				(int)frame.from_location.file_name->len,
+				frame.from_location.file_name->data,
+				frame.from_location.line_no
+			);
+		} else {
+			fprintf(f, ", called from unknown location\n");
+		}
+	}
+}
+
+/* SECTION: TODO REWRITE */
+
 struct list_fn list_fn_copy(struct list_fn this) {
 	list_copy(this.params);
 	if (this.name != NULL) symbol_increfs(this.name);
@@ -1577,6 +1642,11 @@ struct call_res _builtin_call(
 	const lisp_list_t args,
 	struct _builtin_call_opts opts
 ) {
+	/* DEBUG */
+	fprintf(stderr, "Calling builtin function:\n");
+	call_stack_print(stderr);
+	/* DEBUG */
+
 	if (this->eval_args && !opts.inhibit_argument_evaluation) {
 		list_t processed_args = NULL;
 		list_t curr = args;
@@ -1600,6 +1670,11 @@ struct call_res _list_call(
 	const lisp_list_t args,
 	struct _list_call_opts opts
 ) {
+	/* DEBUG */
+	fprintf(stderr, "Calling list function:\n");
+	call_stack_print(stderr);
+	/* DEBUG */
+
 	assert(list_is_fn(this));
 
 	struct list_fn lfn = list_to_fn(this);
@@ -1620,8 +1695,10 @@ struct call_res _list_call(
 			assert(params->val.type == LT_SYMBOL);
 
 			if (args == NULL) {
+				fputs("encountered error:\n", stderr);
+				call_stack_print(stderr);
 				fputs("not enough arguments provided!\n", stderr);
-				break;
+				exit(1);
 			}
 
 			env_def(&env, params->val.as.symbol, curr_arg->val);
@@ -1631,7 +1708,10 @@ struct call_res _list_call(
 		}
 
 		if (curr_arg != NULL) {
+			fputs("encountered error:\n", stderr);
+			call_stack_print(stderr);
 			fputs("too many arguments provided!\n", stderr);
+			exit(1);
 		}
 
 		lisp_value_t body = substitute(lfn.body, &env);
@@ -1674,8 +1754,10 @@ struct call_res _list_call(
 			assert(params->val.type == LT_SYMBOL);
 
 			if (args == NULL) {
+				fputs("encountered error:\n", stderr);
+				call_stack_print(stderr);
 				fputs("not enough arguments provided!\n", stderr);
-				break;
+				exit(1);
 			}
 
 			lisp_value_t tmp = opts.inhibit_argument_evaluation
@@ -1689,7 +1771,10 @@ struct call_res _list_call(
 		}
 
 		if (curr_arg != NULL) {
+			fputs("encountered error:\n", stderr);
+			call_stack_print(stderr);
 			fputs("too many arguments provided!\n", stderr);
+			exit(1);
 		}
 
 		if (replace_env) {
@@ -3409,6 +3494,9 @@ void destroy_envs(int n) {
 	while (n) {
 		assert(curr_env->parent != NULL);
 		struct env *env = curr_env;
+		if (curr_env->params_of != NULL) {
+			function_leave();
+		}
 		curr_env = env->parent;
 		env_free(env);
 		--n;
@@ -3457,11 +3545,21 @@ recurse:
 			}
 
 			lisp_value_t fn = eval(val.as.list->val);
+			if (val.has_location) {
+				function_enter(fn, val.location);
+			} else {
+				function_enter_no_location(fn);
+			}
 			if (fn.type != LT_BUILTIN && fn.type != LT_LIST) {
+				fputs("encountered error:\n", stderr);
+				call_stack_print(stderr);
+
 				struct string_builder sb = {0};
 				value_repr(fn, &sb);
 				fprintf(stderr, "error: tried calling value %.*s as function\n", (int)sb.count, sb.items);
 				sb_clear(&sb);
+
+				function_leave();
 				destroy_envs(envs);
 				value_decrefs(val);
 				value_decrefs(fn);
@@ -3479,10 +3577,12 @@ recurse:
 			if (!res.eval) {
 				assert(!res.destroy_env);
 				destroy_envs(envs);
+				function_leave();
 				return res.result;
 			}
 
 			if (res.destroy_env) ++envs;
+			else function_leave();
 			val = res.result;
 			tailcall = true;
 			goto recurse;
@@ -3557,7 +3657,13 @@ void run_file(const char *fname) {
 		struct parsed_item item = parser_next(&parser);
 		switch (item.type) {
 			case PIT_OK: {
+				assert(call_stack.count == 0);
 				lisp_value_t evald = eval(item.as.value);
+				if (call_stack.count != 0) {
+					fputs("error: non-empty callstack after evaluating value!\n", stderr);
+					call_stack_print(stderr);
+					exit(1);
+				}
 				value_decrefs(last_res);
 				last_res = evald;
 			} break;
@@ -3596,7 +3702,13 @@ void run_repl(void) {
 		struct parsed_item item = parser_next(&parser);
 		switch (item.type) {
 			case PIT_OK: {
+				assert(call_stack.count == 0);
 				lisp_value_t evald = eval(item.as.value);
+				if (call_stack.count != 0) {
+					fputs("error: non-empty callstack after evaluating value!\n", stderr);
+					call_stack_print(stderr);
+					exit(1);
+				}
 				value_decrefs(last_res);
 				last_res = evald;
 			} break;
