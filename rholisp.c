@@ -137,6 +137,9 @@ enum cmp_result {
 
 // the c types for each lisp type (declaration)
 
+// information of where the value originated from
+struct value_location;
+
 struct value;
 typedef struct value lisp_value_t;
 
@@ -290,10 +293,17 @@ string_t sb_to_string(struct string_builder *sb);
 
 /* SECTION: LISP TYPES AND VALUES (DEFINITION) */
 
+struct value_location {
+	lisp_string_t file_name;
+	lisp_number_t line_no;
+};
+
 // LISP VALUES
 
 struct value {
 	enum lisp_type type;
+	bool has_location;
+	struct value_location location;
 	union {
 #define X(type_name, _) lisp_ ## type_name ## _t type_name;
 		LIST_OF_LISP_TYPES
@@ -359,6 +369,10 @@ void value_destroy(lisp_value_t this) {
 #undef X
 		default: break;
 	}
+
+	if (this.has_location) {
+		string_decrefs(this.location.file_name);
+	}
 }
 
 // + init +
@@ -366,6 +380,8 @@ void value_destroy(lisp_value_t this) {
 struct value value_of_ ## type_name(lisp_ ## type_name ## _t type_name) { \
 	return (struct value) { \
 		.type = enum_name, \
+		.has_location = false, \
+		.location = {0}, \
 		.as.type_name = type_name, \
 	}; \
 }
@@ -862,7 +878,7 @@ void parsed_item_destroy(struct parsed_item *this);
 struct parsed_item quoted_item(struct file_position pos, struct parsed_item item);
 
 struct parser {
-	const char *file_name;
+	lisp_string_t file_name;
 	const char *file;
 	size_t file_size;
 	struct file_position pos;
@@ -871,6 +887,10 @@ struct parser {
 struct parser parser_from_strn(const char *name, const char *str, size_t n);
 struct parser parser_from_str(const char *name, const char *str);
 struct parser parser_from_sb(const char *name, struct string_builder sb);
+struct parser parser_s_from_strn(lisp_string_t name, const char *str, size_t n);
+struct parser parser_s_from_str(lisp_string_t name, const char *str);
+struct parser parser_s_from_sb(lisp_string_t name, struct string_builder sb);
+void parser_destroy(struct parser *this);
 
 bool parser_isatend(const struct parser *this);
 void parser_advance(struct parser *this);
@@ -945,12 +965,33 @@ struct parsed_item quoted_item(struct file_position pos, struct parsed_item item
 	lst = list_cons_with(quote_symbol, lst);
 	value_decrefs(item.as.value);
 
-	return parsed_item_value(pos, item.end, value_of_list(lst));
+	lisp_value_t value = value_of_list(lst);
+	/* TODO:
+	value.has_location = true;
+	value.location = (struct value_location) {
+		.file_name = string_copy(???),
+		.line = *(lisp_number_t*)&pos.line,
+	};
+	*/
+
+	return parsed_item_value(pos, item.end, value);
 }
 
 struct parser parser_from_strn(const char *name, const char *str, size_t n) {
+	lisp_string_t sname = string_from_str(name);
+	const struct parser res = parser_s_from_strn(sname, str, n);
+	string_decrefs(sname);
+	return res;
+}
+struct parser parser_from_str(const char *name, const char *str) {
+	return parser_from_strn(name, str, strlen(str));
+}
+struct parser parser_from_sb(const char *name, struct string_builder sb) {
+	return parser_from_strn(name, sb.items, sb.count);
+}
+struct parser parser_s_from_strn(lisp_string_t name, const char *str, size_t n) {
 	return (struct parser) {
-		.file_name = name,
+		.file_name = string_copy(name),
 		.file = str,
 		.file_size = n,
 		.pos = {
@@ -960,11 +1001,15 @@ struct parser parser_from_strn(const char *name, const char *str, size_t n) {
 		},
 	};
 }
-struct parser parser_from_str(const char *name, const char *str) {
-	return parser_from_strn(name, str, strlen(str));
+struct parser parser_s_from_str(lisp_string_t name, const char *str) {
+	return parser_s_from_strn(name, str, strlen(str));
 }
-struct parser parser_from_sb(const char *name, struct string_builder sb) {
-	return parser_from_strn(name, sb.items, sb.count);
+struct parser parser_s_from_sb(lisp_string_t name, struct string_builder sb) {
+	return parser_s_from_strn(name, sb.items, sb.count);
+}
+void parser_destroy(struct parser *this) {
+	string_decrefs(this->file_name);
+	*this = (struct parser) {0};
 }
 
 bool parser_isatend(const struct parser *this) {
@@ -1024,9 +1069,17 @@ struct parsed_item parser_next_list(struct parser *this) {
 		}
 		if (parser_peek(this) == ')') {
 			parser_advance(this);
+
+			lisp_value_t value = value_of_list(res);
+			value.has_location = true;
+			value.location = (struct value_location) {
+				.file_name = string_copy(this->file_name),
+				.line_no = *(lisp_number_t*)&start_pos.line,
+			};
+
 			return parsed_item_value(
 				start_pos, this->pos,
-				value_of_list(res)
+				value
 			);
 		}
 
@@ -1113,7 +1166,14 @@ struct parsed_item parser_next_string(struct parser *this) {
 		}
 	}
 
-	return parsed_item_value(start_pos, this->pos, value_of_string(res));
+	lisp_value_t value = value_of_string(res);
+	value.has_location = true;
+	value.location = (struct value_location) {
+		.file_name = string_copy(this->file_name),
+		.line_no = *(lisp_number_t*)&start_pos.line,
+	};
+
+	return parsed_item_value(start_pos, this->pos, value);
 }
 struct parsed_item parser_next_number(struct parser *this) {
 	parser_skip_ws_or_comment(this);
@@ -1148,9 +1208,16 @@ struct parsed_item parser_next_number(struct parser *this) {
 
 	if (negative) res = 1+~res;
 
+	lisp_value_t value = value_of_number(*(i64*)&res);
+	value.has_location = true;
+	value.location = (struct value_location) {
+		.file_name = string_copy(this->file_name),
+		.line_no = *(lisp_number_t*)&start_pos.line,
+	};
+
 	return parsed_item_value(
 		start_pos, this->pos,
-		value_of_number(*(i64*)&res)
+		value
 	);
 }
 struct parsed_item parser_next_char(struct parser *this) {
@@ -1190,9 +1257,16 @@ struct parsed_item parser_next_char(struct parser *this) {
 
 		for (size_t i = 0; i < sizeof(escapes)/sizeof(*escapes); ++i) {
 			if (escapes[i][1] == e) {
+				lisp_value_t value = value_of_number(escapes[i][0]);
+				value.has_location = true;
+				value.location = (struct value_location) {
+					.file_name = string_copy(this->file_name),
+					.line_no = *(lisp_number_t*)&start_pos.line,
+				};
+
 				return parsed_item_value(
 					start_pos, this->pos,
-					value_of_number(escapes[i][0])
+					value
 				);
 			}
 		}
@@ -1203,9 +1277,16 @@ struct parsed_item parser_next_char(struct parser *this) {
 		);
 	}
 
+	lisp_value_t value = value_of_number(ch);
+	value.has_location = true;
+	value.location = (struct value_location) {
+		.file_name = string_copy(this->file_name),
+		.line_no = *(lisp_number_t*)&start_pos.line,
+	};
+
 	return parsed_item_value(
 		start_pos, this->pos,
-		value_of_number(ch)
+		value
 	);
 }
 struct parsed_item parser_next_symbol(struct parser *this) {
@@ -1224,11 +1305,18 @@ struct parsed_item parser_next_symbol(struct parser *this) {
 		parser_advance(this);
 	}
 
+	lisp_value_t value = value_of_symbol(symbol_from_strn(
+		start_pos.pos, this->pos.pos-start_pos.pos
+	));
+	value.has_location = true;
+	value.location = (struct value_location) {
+		.file_name = string_copy(this->file_name),
+		.line_no = *(lisp_number_t*)&start_pos.line,
+	};
+
 	return parsed_item_value(
 		start_pos, this->pos,
-		value_of_symbol(symbol_from_strn(
-			start_pos.pos, this->pos.pos-start_pos.pos
-		))
+		value
 	);
 }
 struct parsed_item parser_next(struct parser *this) {
@@ -1253,13 +1341,26 @@ struct parsed_item parser_next(struct parser *this) {
 	} else if ((parser_peek(this) == 'T' || parser_peek(this) == 'F')
 	&& !is_symchar(parser_peeknext(this))) {
 		const struct file_position pos = this->pos;
-		const lisp_value_t value = value_of_boolean(parser_peek(this) == 'T');
+		lisp_value_t value = value_of_boolean(parser_peek(this) == 'T');
+		value.has_location = true;
+		value.location = (struct value_location) {
+			.file_name = string_copy(this->file_name),
+			.line_no = *(lisp_number_t*)&pos.line,
+		};
 		parser_advance(this);
 		return parsed_item_value(pos, this->pos, value);
 	} else if (parser_peek(this) == '\'' && !is_symchar(parser_peeknext(this))) {
 		const struct file_position pos = this->pos;
 		parser_advance(this);
-		return quoted_item(pos, parser_next(this));
+		struct parsed_item res = quoted_item(pos, parser_next(this));
+		if (res.type == PIT_OK) {
+			res.as.value.has_location = true;
+			res.as.value.location = (struct value_location) {
+				.file_name = string_copy(this->file_name),
+				.line_no = *(lisp_number_t*)&pos.line,
+			};
+		}
+		return res;
 	} else if (parser_peek(this) == '#' && !is_symchar(parser_peeknext(this))) {
 		return parser_next_char(this);
 	} else {
@@ -2221,6 +2322,7 @@ struct call_res lparse(list_t args) {
 	string_decrefs(tmp);
 
 	parsed_item_destroy(&item);
+	parser_destroy(&parser);
 
 	return call_res_from(value_of_list(res));
 }
@@ -3416,7 +3518,7 @@ void run_file(const char *fname) {
 			default: {
 				fprintf(stderr, "Encountered error parsing file %s:\n", fname);
 				fprintf(stderr, "%s:%lu,%lu %s\n", fname, item.pos.line, item.pos.pos - item.pos.line_start, item.as.error);
-				for (size_t i = 0; i < item.pos.pos - item.pos.line_start; ++i) {
+				for (size_t i = 0; i < (size_t)(item.pos.pos - item.pos.line_start); ++i) {
 					fputc(' ', stderr);
 				}
 				for (const char *it = item.pos.pos; it < item.end.pos && *it != '\n'; ++it) {
@@ -3431,6 +3533,7 @@ void run_file(const char *fname) {
 	}
 
 finish:
+	parser_destroy(&parser);
 	free(data);
 }
 void run_repl(void) {
@@ -3454,7 +3557,7 @@ void run_repl(void) {
 			default: {
 				fprintf(stderr, "Encountered error parsing line:\n");
 				fprintf(stderr, "%s:%lu,%lu %s\n", "<repl>", item.pos.line, item.pos.pos - item.pos.line_start, item.as.error);
-				for (size_t i = 0; i < item.pos.pos - item.pos.line_start; ++i) {
+				for (size_t i = 0; i < (size_t)(item.pos.pos - item.pos.line_start); ++i) {
 					fputc(' ', stderr);
 				}
 				for (const char *it = item.pos.pos; it < item.end.pos && *it != '\n'; ++it) {
@@ -3465,6 +3568,8 @@ void run_repl(void) {
 			} break;
 		}
 		parsed_item_destroy(&item);
+
+		parser_destroy(&parser);
 
 		struct string_builder sb = {0};
 		value_repr(last_res, &sb);
