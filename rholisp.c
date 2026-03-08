@@ -1436,6 +1436,52 @@ void env_free(struct env *env) {
 struct env root_env = {0};
 struct env *curr_env = &root_env;
 
+/* SECTION: CALLSTACK */
+
+struct call_frame {
+	lisp_value_t function;
+	bool has_from_location;
+	struct value_location from_location;
+};
+
+struct call_stack {
+	struct call_frame *items;
+	size_t count;
+	size_t capacity;
+} call_stack = {0};
+
+void function_enter(lisp_value_t function, struct value_location location);
+void function_enter_no_location(lisp_value_t function);
+void function_leave(void);
+
+void function_enter(lisp_value_t function, struct value_location location) {
+	string_increfs(location.file_name);
+
+	da_append(&call_stack, ((struct call_frame) {
+		.function = value_copy(function),
+		.has_from_location = true,
+		.from_location = location,
+	}));
+}
+void function_enter_no_location(lisp_value_t function) {
+	da_append(&call_stack, ((struct call_frame) {
+		.function = value_copy(function),
+		.has_from_location = false,
+		.from_location = {0},
+	}));
+}
+void function_leave(void) {
+	assert(call_stack.count > 0);
+
+	if (call_stack.items[call_stack.count-1].has_from_location) {
+		string_decrefs(call_stack.items[call_stack.count-1].from_location.file_name);
+	}
+
+	value_decrefs(call_stack.items[call_stack.count-1].function);
+
+	--call_stack.count;
+}
+
 /* SECTION: TODO REWRITE */
 
 struct list_fn {
