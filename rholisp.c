@@ -1675,7 +1675,15 @@ struct call_res _list_call(
 	// call_stack_print(stderr);
 	/* DEBUG */
 
-	assert(list_is_fn(this));
+	if (!list_is_fn(this)) {
+		fputs("encountered error:\n", stderr);
+		call_stack_print(stderr);
+		struct string_builder sb = {0};
+		list_repr(this, &sb);
+		fprintf(stderr, "error: tried calling non-function list %.*s as function\n", (int)sb.count, sb.items);
+		sb_clear(&sb);
+		exit(1);
+	}
 
 	struct list_fn lfn = list_to_fn(this);
 	list_t params = lfn.params;
@@ -3553,7 +3561,10 @@ recurse:
 				}
 			}
 
+			fputs("encountered error:\n", stderr);
+			call_stack_print(stderr);
 			fprintf(stderr, "undefined symbol `%s`\n", val.as.symbol->sym);
+
 			destroy_envs(envs);
 			leave_multiple(call_stack_depth);
 			value_decrefs(val);
