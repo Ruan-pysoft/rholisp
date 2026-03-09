@@ -1694,7 +1694,7 @@ struct call_res _list_call(
 
 			assert(params->val.type == LT_SYMBOL);
 
-			if (args == NULL) {
+			if (curr_arg == NULL) {
 				fputs("encountered error:\n", stderr);
 				call_stack_print(stderr);
 				fputs("not enough arguments provided!\n", stderr);
@@ -1753,7 +1753,7 @@ struct call_res _list_call(
 
 			assert(params->val.type == LT_SYMBOL);
 
-			if (args == NULL) {
+			if (curr_arg == NULL) {
 				fputs("encountered error:\n", stderr);
 				call_stack_print(stderr);
 				fputs("not enough arguments provided!\n", stderr);
