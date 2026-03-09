@@ -1643,8 +1643,8 @@ struct call_res _builtin_call(
 	struct _builtin_call_opts opts
 ) {
 	/* DEBUG */
-	fprintf(stderr, "Calling builtin function:\n");
-	call_stack_print(stderr);
+	// fprintf(stderr, "Calling builtin function:\n");
+	// call_stack_print(stderr);
 	/* DEBUG */
 
 	if (this->eval_args && !opts.inhibit_argument_evaluation) {
@@ -1671,8 +1671,8 @@ struct call_res _list_call(
 	struct _list_call_opts opts
 ) {
 	/* DEBUG */
-	fprintf(stderr, "Calling list function:\n");
-	call_stack_print(stderr);
+	// fprintf(stderr, "Calling list function:\n");
+	// call_stack_print(stderr);
 	/* DEBUG */
 
 	assert(list_is_fn(this));
@@ -3494,26 +3494,42 @@ void destroy_envs(int n) {
 	while (n) {
 		assert(curr_env->parent != NULL);
 		struct env *env = curr_env;
-		if (curr_env->params_of != NULL) {
-			function_leave();
-		}
 		curr_env = env->parent;
 		env_free(env);
 		--n;
 	}
 }
+void leave_multiple(size_t n) {
+	while (n --> 0) {
+		function_leave();
+	}
+}
 lisp_value_t eval(lisp_value_t val) {
 	int envs = 0;
 	bool tailcall = false;
+	const size_t start_call_stack_depth = call_stack.count;
+	size_t call_stack_depth = 0;
+
+	// fprintf(stderr, "Eval'ing value, got call stack depth %ld\n", start_call_stack_depth);
+	// if (start_call_stack_depth != 0) {
+		// fprintf(stderr, "==========\n");
+		// call_stack_print(stderr);
+		// fprintf(stderr, "==========\n");
+	// }
 
 	value_increfs(val);
 
 recurse:
+	// fprintf(stderr, "At value, got starting call stack depth of %lu, extra depth of %lu, and current depth of %lu\n", start_call_stack_depth, call_stack_depth, call_stack.count);
+	assert(start_call_stack_depth + call_stack_depth == call_stack.count);
+
 	switch (val.type) {
 		case LT_SYMBOL: {
 			if (strcmp(val.as.symbol->sym, "_") == 0) {
 				destroy_envs(envs);
+				leave_multiple(call_stack_depth);
 				value_decrefs(val);
+				assert(call_stack.count == start_call_stack_depth);
 				return value_copy(last_res);
 			}
 
@@ -3521,26 +3537,34 @@ recurse:
 			if (assoc != NULL) {
 				lisp_value_t res = value_copy(assoc->value);
 				destroy_envs(envs);
+				leave_multiple(call_stack_depth);
 				value_decrefs(val);
+				assert(call_stack.count == start_call_stack_depth);
 				return res;
 			}
 
 			for (size_t i = 0; i < sizeof(BUILTINS)/sizeof(*BUILTINS); ++i) {
 				if (strcmp(val.as.symbol->sym, BUILTINS[i].name) == 0) {
 					destroy_envs(envs);
+					leave_multiple(call_stack_depth);
 					value_decrefs(val);
+					assert(call_stack.count == start_call_stack_depth);
 					return value_of_builtin(&BUILTINS[i].fn);
 				}
 			}
 
 			fprintf(stderr, "undefined symbol `%s`\n", val.as.symbol->sym);
 			destroy_envs(envs);
+			leave_multiple(call_stack_depth);
 			value_decrefs(val);
+			assert(call_stack.count == start_call_stack_depth);
 			return nil;
 		} break;
 		case LT_LIST: {
 			if (val.as.list == NULL) {
 				destroy_envs(envs);
+				leave_multiple(call_stack_depth);
+				assert(call_stack.count == start_call_stack_depth);
 				return val;
 			}
 
@@ -3550,6 +3574,8 @@ recurse:
 			} else {
 				function_enter_no_location(fn);
 			}
+			++call_stack_depth;
+			assert(start_call_stack_depth + call_stack_depth == call_stack.count);
 			if (fn.type != LT_BUILTIN && fn.type != LT_LIST) {
 				fputs("encountered error:\n", stderr);
 				call_stack_print(stderr);
@@ -3560,9 +3586,13 @@ recurse:
 				sb_clear(&sb);
 
 				function_leave();
+				--call_stack_depth;
+				assert(start_call_stack_depth + call_stack_depth == call_stack.count);
 				destroy_envs(envs);
+				leave_multiple(call_stack_depth);
 				value_decrefs(val);
 				value_decrefs(fn);
+				assert(call_stack.count == start_call_stack_depth);
 				return nil;
 			}
 
@@ -3578,17 +3608,27 @@ recurse:
 				assert(!res.destroy_env);
 				destroy_envs(envs);
 				function_leave();
+				--call_stack_depth;
+				assert(start_call_stack_depth + call_stack_depth == call_stack.count);
+				leave_multiple(call_stack_depth);
+				assert(call_stack.count == start_call_stack_depth);
 				return res.result;
 			}
 
 			if (res.destroy_env) ++envs;
-			else function_leave();
+			else {
+				function_leave();
+				--call_stack_depth;
+				assert(start_call_stack_depth + call_stack_depth == call_stack.count);
+			}
 			val = res.result;
 			tailcall = true;
 			goto recurse;
 		} break;
 		default:
 			destroy_envs(envs);
+			leave_multiple(call_stack_depth);
+			assert(call_stack.count == start_call_stack_depth);
 			return val;
 	}
 
