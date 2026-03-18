@@ -452,9 +452,9 @@ struct builtin {
 // + required functions +
 
 enum cmp_result builtin_cmp(const lisp_builtin_t lhs, const lisp_builtin_t rhs) {
-	(void) lhs;
-	(void) rhs;
-	assert(false && "TODO");
+	if ((void*)lhs->fn < (void*)rhs->fn) return CMP_LT;
+	else if ((void*)lhs->fn > (void*)rhs->fn) return CMP_GT;
+	else return CMP_EQ;
 }
 void builtin_repr(const lisp_builtin_t this, struct string_builder *sb) {
 	if (this->eval_args) {
@@ -545,9 +545,21 @@ const struct value nil = {
 // + required functions +
 
 enum cmp_result list_cmp(const lisp_list_t lhs, const lisp_list_t rhs) {
-	(void) lhs;
-	(void) rhs;
-	assert(false && "TODO");
+	if (lhs == rhs) return CMP_EQ;
+
+	lisp_list_t lhead, rhead;
+
+	for (lhead = lhs, rhead = rhs; lhead != NULL && rhead != NULL;) {
+		enum cmp_result cmp = value_cmp(lhead->val, rhead->val);
+		if (cmp != CMP_EQ) return cmp;
+
+		lhead = lhead->next;
+		rhead = rhead->next;
+	}
+
+	if (lhead != NULL) return CMP_GT;
+	else if (rhead != NULL) return CMP_LT;
+	else return CMP_EQ;
 }
 void list_repr(const lisp_list_t this, struct string_builder *sb) {
 	sb_addc(sb, '(');
@@ -710,9 +722,16 @@ struct string {
 // + required functions +
 
 enum cmp_result string_cmp(const lisp_string_t lhs, const lisp_string_t rhs) {
-	(void) lhs;
-	(void) rhs;
-	assert(false && "TODO");
+	if (lhs == rhs) return CMP_EQ;
+
+	const size_t len = lhs->len < rhs->len ? lhs->len : rhs->len;
+	const int cmp = strncmp(lhs->data, rhs->data, len);
+
+	if (cmp == 0) {
+		if (lhs->len < rhs->len) return CMP_LT;
+		else if (lhs->len > rhs->len) return CMP_GT;
+		else return CMP_EQ;
+	} else return cmp < 0 ? CMP_LT : CMP_GT;
 }
 void string_repr(const lisp_string_t this, struct string_builder *sb) {
 	sb_addc(sb, '"');
@@ -1642,11 +1661,6 @@ struct call_res _builtin_call(
 	const lisp_list_t args,
 	struct _builtin_call_opts opts
 ) {
-	/* DEBUG */
-	// fprintf(stderr, "Calling builtin function:\n");
-	// call_stack_print(stderr);
-	/* DEBUG */
-
 	if (this->eval_args && !opts.inhibit_argument_evaluation) {
 		list_t processed_args = NULL;
 		list_t curr = args;
@@ -1670,11 +1684,6 @@ struct call_res _list_call(
 	const lisp_list_t args,
 	struct _list_call_opts opts
 ) {
-	/* DEBUG */
-	// fprintf(stderr, "Calling list function:\n");
-	// call_stack_print(stderr);
-	/* DEBUG */
-
 	if (!list_is_fn(this)) {
 		fputs("encountered error:\n", stderr);
 		call_stack_print(stderr);
@@ -3507,37 +3516,19 @@ void destroy_envs(int n) {
 		--n;
 	}
 }
-void leave_multiple(size_t n) {
-	while (n --> 0) {
-		function_leave();
-	}
-}
 lisp_value_t eval(lisp_value_t val) {
 	int envs = 0;
 	bool tailcall = false;
-	const size_t start_call_stack_depth = call_stack.count;
-	size_t call_stack_depth = 0;
-
-	// fprintf(stderr, "Eval'ing value, got call stack depth %ld\n", start_call_stack_depth);
-	// if (start_call_stack_depth != 0) {
-		// fprintf(stderr, "==========\n");
-		// call_stack_print(stderr);
-		// fprintf(stderr, "==========\n");
-	// }
 
 	value_increfs(val);
 
 recurse:
-	// fprintf(stderr, "At value, got starting call stack depth of %lu, extra depth of %lu, and current depth of %lu\n", start_call_stack_depth, call_stack_depth, call_stack.count);
-	assert(start_call_stack_depth + call_stack_depth == call_stack.count);
 
 	switch (val.type) {
 		case LT_SYMBOL: {
 			if (strcmp(val.as.symbol->sym, "_") == 0) {
 				destroy_envs(envs);
-				leave_multiple(call_stack_depth);
 				value_decrefs(val);
-				assert(call_stack.count == start_call_stack_depth);
 				return value_copy(last_res);
 			}
 
@@ -3545,18 +3536,14 @@ recurse:
 			if (assoc != NULL) {
 				lisp_value_t res = value_copy(assoc->value);
 				destroy_envs(envs);
-				leave_multiple(call_stack_depth);
 				value_decrefs(val);
-				assert(call_stack.count == start_call_stack_depth);
 				return res;
 			}
 
 			for (size_t i = 0; i < sizeof(BUILTINS)/sizeof(*BUILTINS); ++i) {
 				if (strcmp(val.as.symbol->sym, BUILTINS[i].name) == 0) {
 					destroy_envs(envs);
-					leave_multiple(call_stack_depth);
 					value_decrefs(val);
-					assert(call_stack.count == start_call_stack_depth);
 					return value_of_builtin(&BUILTINS[i].fn);
 				}
 			}
@@ -3566,27 +3553,16 @@ recurse:
 			fprintf(stderr, "undefined symbol `%s`\n", val.as.symbol->sym);
 
 			destroy_envs(envs);
-			leave_multiple(call_stack_depth);
 			value_decrefs(val);
-			assert(call_stack.count == start_call_stack_depth);
 			return nil;
 		} break;
 		case LT_LIST: {
 			if (val.as.list == NULL) {
 				destroy_envs(envs);
-				leave_multiple(call_stack_depth);
-				assert(call_stack.count == start_call_stack_depth);
 				return val;
 			}
 
 			lisp_value_t fn = eval(val.as.list->val);
-			if (val.has_location) {
-				function_enter(fn, val.location);
-			} else {
-				function_enter_no_location(fn);
-			}
-			++call_stack_depth;
-			assert(start_call_stack_depth + call_stack_depth == call_stack.count);
 			if (fn.type != LT_BUILTIN && fn.type != LT_LIST) {
 				fputs("encountered error:\n", stderr);
 				call_stack_print(stderr);
@@ -3596,14 +3572,9 @@ recurse:
 				fprintf(stderr, "error: tried calling value %.*s as function\n", (int)sb.count, sb.items);
 				sb_clear(&sb);
 
-				function_leave();
-				--call_stack_depth;
-				assert(start_call_stack_depth + call_stack_depth == call_stack.count);
 				destroy_envs(envs);
-				leave_multiple(call_stack_depth);
 				value_decrefs(val);
 				value_decrefs(fn);
-				assert(call_stack.count == start_call_stack_depth);
 				return nil;
 			}
 
@@ -3618,28 +3589,16 @@ recurse:
 			if (!res.eval) {
 				assert(!res.destroy_env);
 				destroy_envs(envs);
-				function_leave();
-				--call_stack_depth;
-				assert(start_call_stack_depth + call_stack_depth == call_stack.count);
-				leave_multiple(call_stack_depth);
-				assert(call_stack.count == start_call_stack_depth);
 				return res.result;
 			}
 
 			if (res.destroy_env) ++envs;
-			else {
-				function_leave();
-				--call_stack_depth;
-				assert(start_call_stack_depth + call_stack_depth == call_stack.count);
-			}
 			val = res.result;
 			tailcall = true;
 			goto recurse;
 		} break;
 		default:
 			destroy_envs(envs);
-			leave_multiple(call_stack_depth);
-			assert(call_stack.count == start_call_stack_depth);
 			return val;
 	}
 
@@ -3708,13 +3667,7 @@ void run_file(const char *fname) {
 		struct parsed_item item = parser_next(&parser);
 		switch (item.type) {
 			case PIT_OK: {
-				assert(call_stack.count == 0);
 				lisp_value_t evald = eval(item.as.value);
-				if (call_stack.count != 0) {
-					fputs("error: non-empty callstack after evaluating value!\n", stderr);
-					call_stack_print(stderr);
-					exit(1);
-				}
 				value_decrefs(last_res);
 				last_res = evald;
 			} break;
@@ -3753,13 +3706,7 @@ void run_repl(void) {
 		struct parsed_item item = parser_next(&parser);
 		switch (item.type) {
 			case PIT_OK: {
-				assert(call_stack.count == 0);
 				lisp_value_t evald = eval(item.as.value);
-				if (call_stack.count != 0) {
-					fputs("error: non-empty callstack after evaluating value!\n", stderr);
-					call_stack_print(stderr);
-					exit(1);
-				}
 				value_decrefs(last_res);
 				last_res = evald;
 			} break;
